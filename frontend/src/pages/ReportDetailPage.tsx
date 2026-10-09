@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Tabs, Table, Card, Row, Col, Statistic, Tag, Button, Space, Select,
   Descriptions, Drawer, Typography, Spin, message, Progress, Divider, Tooltip, Alert, Modal, Input,
@@ -55,18 +55,22 @@ const renderLayerHeaderTitle = (group: MetricLayer) => (
   </div>
 );
 
-const formatScore = (score: any, metricName: string): { display: string; color: string; explain: string } => {
+const formatScore = (score: any, metricName: string, metricType?: string | null): { display: string; color: string; explain: string } => {
   if (score === null || score === undefined) return { display: 'N/A', color: '#999', explain: '指标计算出错，无法得出分数' };
   if (typeof score === 'string') {
     const pass = ['pass', 'yes', 'true', '1'].includes(score.toLowerCase());
     return { display: score, color: pass ? '#52c41a' : '#ff4d4f', explain: pass ? '通过' : '不通过' };
   }
   const num = Number(score);
-  const isBinary = ['agent_goal_accuracy', 'harmfulness', 'coherence'].includes(metricName);
+  const isBinary = ['agent_goal_accuracy', 'harmfulness', 'coherence'].includes(metricName)
+    || metricType === 'exact_match'
+    || metricType === 'aspect_critic';
   if (isBinary) {
+    const hitLabel = metricType === 'exact_match' ? '匹配' : '是';
+    const missLabel = metricType === 'exact_match' ? '不匹配' : '否';
     return num >= 0.5
-      ? { display: `${num}（是）`, color: '#52c41a', explain: '满足条件' }
-      : { display: `${num}（否）`, color: '#ff4d4f', explain: '不满足条件' };
+      ? { display: `${num}（${hitLabel}）`, color: '#52c41a', explain: metricType === 'exact_match' ? '匹配期望值' : '满足条件' }
+      : { display: `${num}（${missLabel}）`, color: '#ff4d4f', explain: metricType === 'exact_match' ? '未匹配期望值' : '不满足条件' };
   }
   const pct = (num * 100).toFixed(1);
   let level = '优秀'; let color = '#52c41a';
@@ -294,6 +298,14 @@ const ReportDetailPage: React.FC = () => {
     return `${prefix}${(v * 100).toFixed(1)}%`;
   };
   const metricNames = summary ? Object.keys(summary.metric_summary || {}) : [];
+  const metricTypeByName = useMemo(() => {
+    const summaryMap = (summary?.metric_summary || {}) as Record<string, any>;
+    const map: Record<string, string | undefined> = {};
+    Object.keys(summaryMap).forEach((name) => {
+      map[name] = summaryMap[name]?.metric_type;
+    });
+    return map;
+  }, [summary]);
   const evalTask = summary?.eval_task;
   const metricHelp = (metric: string) => (
     <MetricHelpIcon metricName={metric} onClick={() => setHelpMetric(metric)} />
@@ -387,7 +399,7 @@ const ReportDetailPage: React.FC = () => {
         render: (_: unknown, record: EvalRowResult) => {
           const ms = record.metric_scores?.[metric];
           if (!ms) return <Text type="secondary">-</Text>;
-          const { display, color } = formatScore(ms.score, metric);
+          const { display, color } = formatScore(ms.score, metric, metricTypeByName[metric]);
           return <Text style={{ color, fontWeight: 500 }}>{display}</Text>;
         },
       })),
@@ -788,7 +800,7 @@ const ReportDetailPage: React.FC = () => {
                 dataSource={group.metrics.map((metric) => {
                   const result = scores[metric];
                   const info = getMetricInfo(metric);
-                  const { display, color, explain } = formatScore(result.score, metric);
+                  const { display, color, explain } = formatScore(result.score, metric, metricTypeByName[metric]);
                   return { metric, info, result, display, color, explain };
                 })}
                 pagination={false}

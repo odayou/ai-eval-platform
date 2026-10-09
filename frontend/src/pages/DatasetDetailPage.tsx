@@ -26,6 +26,7 @@ import {
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { Dataset, DatasetRow, FieldDefinition, PaginatedResponse } from '../types';
 import * as api from '../services/api';
+import FieldLabel from '../components/FieldLabel';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -198,7 +199,7 @@ const DatasetDetailPage: React.FC = () => {
   const fieldSchema: FieldDefinition[] = dataset?.field_schema || [];
 
   const dataColumns = fieldSchema.map((field) => ({
-    title: field.name,
+    title: <FieldLabel field={field} showType={false} />,
     dataIndex: ['data', field.name],
     key: field.name,
     ellipsis: true,
@@ -367,14 +368,7 @@ const DatasetDetailPage: React.FC = () => {
             <Form.Item
               key={field.name}
               name={field.name}
-              label={
-                <Space>
-                  <span>{field.name}</span>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    ({field.type})
-                  </Text>
-                </Space>
-              }
+              label={<FieldLabel field={field} />}
               rules={
                 field.required ? [{ required: true, message: `请输入 ${field.name}` }] : []
               }

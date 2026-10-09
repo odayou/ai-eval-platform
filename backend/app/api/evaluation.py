@@ -234,7 +234,7 @@ async def debug_evaluation_flow(payload: EvalDebugRequest, db: Session = Depends
         raise HTTPException(status_code=400, detail="Scenario has no metrics")
 
     llm_config = db.query(LLMConfig).filter(LLMConfig.id == payload.llm_config_id).first()
-    if not llm_config:
+    if not llm_config and payload.llm_config_id:
         raise HTTPException(status_code=404, detail="LLM config not found")
 
     base_row_data = dict(dataset_row.data or {})
@@ -269,14 +269,17 @@ async def debug_evaluation_flow(payload: EvalDebugRequest, db: Session = Depends
     scenario_snapshot = build_scenario_snapshot(scenario, payload.metric_overrides)
     scenario_metrics = snapshot_to_scenario_metrics(scenario_snapshot)
     metrics: list[tuple[str, object, ScenarioMetric]] = []
+    needs_llm = False
     for scenario_metric in scenario_metrics:
         metric_def = scenario_metric.metric_definition
         try:
-            _kind, metric_instance = build_metric(
+            kind, metric_instance = build_metric(
                 metric_def,
                 prompt_override=getattr(scenario_metric, "prompt_override", None),
                 scenario_metric=scenario_metric,
             )
+            if kind == "llm":
+                needs_llm = True
             metrics.append((metric_def.name, metric_instance, scenario_metric))
         except Exception as exc:
             errors.append(f"指标 [{metric_def.display_name}] 构建失败: {str(exc)[:300]}")
@@ -288,7 +291,15 @@ async def debug_evaluation_flow(payload: EvalDebugRequest, db: Session = Depends
     if missing_fields:
         warnings.append(f"字段缺失可能导致无法完整评分: {', '.join(missing_fields)}")
 
-    judge_client = OpenAIJudgeClient(llm_config)
+    if needs_llm and not llm_config:
+        raise HTTPException(
+            status_code=400,
+            detail="当前场景包含需要 Judge 模型的指标，请先选择可用的 LLM 配置",
+        )
+    if not needs_llm:
+        warnings.append("当前场景全部为确定性指标，不会调用 Judge 模型。")
+
+    judge_client = OpenAIJudgeClient(llm_config) if needs_llm else None
     for metric_name, metric_instance, scenario_metric in metrics:
         metric_def = scenario_metric.metric_definition
         metric_warnings = diagnose_metric_prompt(
@@ -309,8 +320,9 @@ async def debug_evaluation_flow(payload: EvalDebugRequest, db: Session = Depends
             "error": None,
         }
         try:
-            judge_client.last_messages = None
-            judge_client.last_raw_response = None
+            if judge_client is not None:
+                judge_client.last_messages = None
+                judge_client.last_raw_response = None
             result = await metric_instance.ascore(row_data, judge_client)
             value = result.value
             if isinstance(value, (int, float)):
@@ -325,8 +337,9 @@ async def debug_evaluation_flow(payload: EvalDebugRequest, db: Session = Depends
             trace["error"] = error
             errors.append(f"指标 [{metric_name}] 评分失败: {error}")
         finally:
-            trace["prompt_messages"] = judge_client.last_messages
-            trace["judge_raw_response"] = judge_client.last_raw_response
+            if judge_client is not None:
+                trace["prompt_messages"] = judge_client.last_messages
+                trace["judge_raw_response"] = judge_client.last_raw_response
             trace["parsed_result"] = metric_scores.get(metric_name)
             judge_traces.append(trace)
         await asyncio.sleep(0)

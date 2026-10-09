@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.models.evaluation import EvalTask, EvalRowResult
+from app.models.metric_definition import MetricDefinition
 from app.core.evaluation_engine import DEFAULT_SUMMARY_PASS_THRESHOLD
 from app.schemas.evaluation import (
     EvalTaskResponse,
@@ -149,6 +150,7 @@ def get_report_summary(eval_id: int, db: Session = Depends(get_db)):
     pass_rate = (pass_count / total_count) if total_count > 0 else 0.0
 
     metric_summary = _normalize_metric_summary(task.summary_scores or {}, row_results)
+    _attach_metric_types(db, metric_summary)
     manual_review_summary = {
         "reviewed_count": sum(1 for r in row_results if r.manual_status is not None),
         "manual_pass_count": sum(1 for r in row_results if r.manual_status == "pass"),
@@ -167,6 +169,22 @@ def get_report_summary(eval_id: int, db: Session = Depends(get_db)):
         metric_summary=metric_summary,
         manual_review_summary=manual_review_summary,
     )
+
+
+def _attach_metric_types(db: Session, metric_summary: dict) -> None:
+    """给指标汇总补上 metric_type，便于前端按类型展示（如 0/1 二值显示）。"""
+    names = [name for name in (metric_summary or {}).keys() if name]
+    if not names:
+        return
+    rows = (
+        db.query(MetricDefinition.name, MetricDefinition.metric_type)
+        .filter(MetricDefinition.name.in_(names))
+        .all()
+    )
+    type_by_name = {name: metric_type for name, metric_type in rows}
+    for name, info in metric_summary.items():
+        if isinstance(info, dict):
+            info["metric_type"] = type_by_name.get(name)
 
 
 def _normalize_metric_summary(metric_summary: dict, row_results: list[EvalRowResult]) -> dict:

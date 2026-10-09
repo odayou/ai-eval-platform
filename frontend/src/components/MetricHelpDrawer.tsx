@@ -238,9 +238,17 @@ const METRIC_HELP: Record<string, MetricHelpInfo> = {
   },
 };
 
-export const MetricHelpIcon: React.FC<{ metricName: string; onClick: () => void }> = ({ metricName, onClick }) => {
+export const MetricHelpIcon: React.FC<{ metricName: string; metricType?: string; onClick: () => void }> = ({
+  metricName,
+  metricType,
+  onClick,
+}) => {
   const info = METRIC_HELP[metricName];
-  const tip = info ? `点击查看评分标准和计算方式：${info.compareSubject}` : '点击查看指标详情';
+  const tip = info
+    ? `点击查看评分标准和计算方式：${info.compareSubject}`
+    : metricType === 'exact_match'
+      ? '确定性匹配指标：不调用大模型，直接按等值/包含/正则比对字段'
+      : '点击查看指标详情';
   return (
     <Tooltip title={tip} placement="top">
       <QuestionCircleOutlined
@@ -254,13 +262,15 @@ export const MetricHelpIcon: React.FC<{ metricName: string; onClick: () => void 
 export const MetricHelpDrawer: React.FC<{
   open: boolean;
   metricName: string | null;
+  metricType?: string | null;
   onClose: () => void;
-}> = ({ open, metricName, onClose }) => {
+}> = ({ open, metricName, metricType, onClose }) => {
   const info = metricName ? METRIC_HELP[metricName] : null;
+  const isExactMatch = !info && metricType === 'exact_match';
 
   return (
     <Drawer
-      title={info ? info.displayName : '指标说明'}
+      title={info ? info.displayName : isExactMatch ? '确定性匹配指标' : '指标说明'}
       open={open}
       onClose={onClose}
       width={600}
@@ -310,6 +320,57 @@ export const MetricHelpDrawer: React.FC<{
             }}>
               {info.example}
             </pre>
+          </Paragraph>
+        </Typography>
+      ) : isExactMatch ? (
+        <Typography>
+          <Tag color="green" style={{ marginBottom: 12 }}>确定性匹配</Tag>
+
+          <Title level={5}>比较对象</Title>
+          <Paragraph>
+            <Text code style={{ fontSize: 14, lineHeight: 2 }}>
+              待比对字段（配置 field，可来自自定义解析器或路径映射） vs 期望值（配置 expected_field 数据集字段，或 expected_value 固定值）
+            </Text>
+          </Paragraph>
+
+          <Divider />
+
+          <Title level={5}>计算方法</Title>
+          <Paragraph>
+            <pre style={{
+              background: '#f5f5f5', padding: 12, borderRadius: 6,
+              fontSize: 13, lineHeight: 1.8, whiteSpace: 'pre-wrap',
+            }}>
+{`不调用大模型，本地直接比对：
+- exact：两个值相等（默认去除首尾空白、不区分大小写）
+- contains：实际值包含期望值
+- regex：期望值作为正则匹配实际值
+
+命中 → 1 分；未命中 → 0 分
+待比对字段或期望值为空 → 该条无法评分`}
+            </pre>
+          </Paragraph>
+
+          <Divider />
+
+          <Title level={5}>分数范围</Title>
+          <Paragraph><Text strong>0 或 1</Text></Paragraph>
+
+          <Divider />
+
+          <Title level={5}>所需数据字段</Title>
+          <Paragraph>
+            {['field 指定的字段', 'expected_field 指定的字段（或固定期望值）'].map((f) => (
+              <Tag key={f} color="geekblue" style={{ marginBottom: 4 }}>{f}</Tag>
+            ))}
+          </Paragraph>
+
+          <Divider />
+
+          <Title level={5}>适用场景</Title>
+          <Paragraph>
+            接口结果解析后与期望值核对（如抽取出的需求类型是否等于标注值）、固定值校验、正则格式校验。
+            不需要语义理解时优先使用，结果稳定可复现且无模型调用成本。
           </Paragraph>
         </Typography>
       ) : (

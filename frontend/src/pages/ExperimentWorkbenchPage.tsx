@@ -18,6 +18,7 @@ import {
   Steps,
   Tag,
   Timeline,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
@@ -44,6 +45,14 @@ import EndpointTargetModal from '../components/resource/EndpointTargetModal';
 import LLMConfigModal from '../components/resource/LLMConfigModal';
 import ScenarioQuickCreateModal from '../components/resource/ScenarioQuickCreateModal';
 import DatasetRowsPanel from '../components/resource/DatasetRowsPanel';
+import {
+  describeExactMatchConfig,
+  getMetricRequiredFields,
+  isDeterministicMetricType,
+  isExactMatchMetricType,
+  metricTypeLabel,
+  METRIC_REQUIRED_FIELDS_BY_NAME,
+} from '../utils/metricTypes';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -67,28 +76,7 @@ const statusLabelMap: Record<string, string> = {
   cancelled: '已取消',
 };
 
-const metricRequiredFields: Record<string, string[]> = {
-  faithfulness: ['response', 'retrieved_contexts'],
-  context_recall: ['retrieved_contexts', 'reference'],
-  context_precision: ['user_input', 'retrieved_contexts'],
-  contextual_relevancy: ['user_input', 'retrieved_contexts'],
-  factual_correctness: ['response', 'reference'],
-  answer_relevancy: ['user_input', 'response'],
-  answer_completeness: ['response', 'reference'],
-  retrieval_hit_rate: ['retrieved_context_ids', 'reference_context_ids'],
-  retrieval_mrr: ['retrieved_context_ids', 'reference_context_ids'],
-  task_completion: ['user_input', 'reference'],
-  tool_call_accuracy: ['user_input', 'reference_tool_calls'],
-  argument_correctness: ['user_input', 'reference_tool_calls'],
-  step_efficiency: ['user_input', 'reference_tool_calls'],
-  agent_goal_accuracy: ['user_input', 'reference'],
-  topic_adherence: ['user_input', 'reference_topics'],
-  turn_relevancy: ['user_input'],
-  conversation_completeness: ['user_input', 'reference'],
-  knowledge_retention: ['user_input'],
-  role_adherence: ['user_input', 'reference_role'],
-  turn_faithfulness: ['user_input', 'retrieved_contexts'],
-};
+const metricRequiredFields: Record<string, string[]> = METRIC_REQUIRED_FIELDS_BY_NAME;
 
 type EvaluationMode = 'offline' | 'endpoint';
 type ResourceSource = 'existing' | 'create' | 'document';
@@ -148,6 +136,8 @@ const loadWorkbenchDraft = (): ExperimentDraft => {
 
 const getMetricPromptTemplate = (scenarioMetric?: ScenarioMetric | null) => {
   if (!scenarioMetric) return '';
+  // 确定性匹配指标不使用提示词，避免把指标说明当成可编辑提示词展示
+  if (isExactMatchMetricType(scenarioMetric.metric_definition?.metric_type)) return '';
   const override = scenarioMetric.prompt_override?.trim();
   if (override) return override;
   const config = scenarioMetric.metric_definition?.config || {};
@@ -166,7 +156,7 @@ const getMetricScoreRange = (metric?: MetricDefinition) => {
   if (metric.metric_type === 'discrete' && Array.isArray(allowed)) {
     return allowed.join(' / ');
   }
-  if (metric.metric_type === 'aspect_critic') return '0 或 1';
+  if (metric.metric_type === 'aspect_critic' || metric.metric_type === 'exact_match') return '0 或 1';
   return '0 到 1';
 };
 
@@ -400,7 +390,9 @@ const ExperimentWorkbenchPage: React.FC = () => {
     const requiredFields = new Set<string>();
     (selectedScenario.metrics || []).forEach((scenarioMetric) => {
       const metricName = scenarioMetric.metric_definition?.name;
-      (metricName ? metricRequiredFields[metricName] || [] : []).forEach((field) => requiredFields.add(field));
+      const fields = getMetricRequiredFields(scenarioMetric.metric_definition)
+        .concat(metricName ? metricRequiredFields[metricName] || [] : []);
+      fields.forEach((field) => requiredFields.add(field));
     });
     const missingFields = Array.from(requiredFields).filter((field) => {
       if (datasetFields.has(field)) return false;
@@ -443,7 +435,8 @@ const ExperimentWorkbenchPage: React.FC = () => {
 
   const stepIndex = (key: string) => steps.findIndex((item) => item.key === key);
   const isTaskDone = currentTask?.status === 'completed';
-  const customPromptCount = (selectedScenario?.metrics || []).filter((item) => item.prompt_override).length;
+  const customPromptCount = (selectedScenario?.metrics || [])
+    .filter((item) => !isExactMatchMetricType(item.metric_definition?.metric_type) && item.prompt_override).length;
   const selectedScenarioMetricCount = selectedScenario?.metrics?.length || 0;
   const datasetReady = Boolean(selectedDataset && selectedDataset.row_count > 0);
   const endpointExtractedFields = endpointTestResult?.extracted_fields || {};
@@ -467,8 +460,11 @@ const ExperimentWorkbenchPage: React.FC = () => {
   const effectiveWeight = selectedMetricOverride && Object.prototype.hasOwnProperty.call(selectedMetricOverride, 'weight')
     ? selectedMetricOverride.weight ?? null
     : selectedScenarioMetric?.weight ?? 1;
+  const selectedMetricDefinition = selectedScenarioMetric?.metric_definition;
+  const isSelectedExactMatch = isExactMatchMetricType(selectedMetricDefinition?.metric_type);
   const promptOverrideCount = (draft.metric_overrides || []).filter((item) => {
     const scenarioMetric = selectedScenarioMetrics.find((metric) => metric.metric_definition_id === item.metric_definition_id);
+    if (isExactMatchMetricType(scenarioMetric?.metric_definition?.metric_type)) return false;
     return item.prompt_override !== undefined && (item.prompt_override || '') !== getMetricPromptTemplate(scenarioMetric);
   }).length;
 
@@ -848,7 +844,11 @@ const ExperimentWorkbenchPage: React.FC = () => {
                   </Descriptions.Item>
                   <Descriptions.Item label="字段">
                     <Space wrap>
-                      {fields.map((field) => <Tag key={field.name}>{field.name}</Tag>)}
+                      {fields.map((field) => (
+                        <Tooltip key={field.name} title={field.description || field.type}>
+                          <Tag>{field.name}</Tag>
+                        </Tooltip>
+                      ))}
                     </Space>
                   </Descriptions.Item>
                 </Descriptions>
@@ -1257,6 +1257,16 @@ const ExperimentWorkbenchPage: React.FC = () => {
             message="这里编辑的是本次实验实例"
             description="不会修改指标定义或场景模板；评测流程验证和正式批量评测都会使用这里传入的覆盖规则，并冻结到任务快照。"
           />
+          {selectedScenarioMetrics.length > 0 && selectedScenarioMetrics.every(
+            (metric) => isDeterministicMetricType(metric.metric_definition?.metric_type),
+          ) && (
+            <Alert
+              type="success"
+              showIcon
+              message="当前场景全部为确定性指标"
+              description="这些指标不调用 Judge LLM（无需配置评测模型），由平台本地计算，结果稳定可复现。"
+            />
+          )}
           {!selectedScenarioMetric && (
             <Alert type="warning" showIcon message="当前场景没有可编辑指标" />
           )}
@@ -1275,7 +1285,14 @@ const ExperimentWorkbenchPage: React.FC = () => {
                           selected_metric_definition_id: scenarioMetric.metric_definition_id,
                         }))}
                       >
-                        {scenarioMetric.metric_definition?.display_name || scenarioMetric.metric_definition?.name || scenarioMetric.metric_definition_id}
+                        <Space size={4}>
+                          {scenarioMetric.metric_definition?.display_name || scenarioMetric.metric_definition?.name || scenarioMetric.metric_definition_id}
+                          {isDeterministicMetricType(scenarioMetric.metric_definition?.metric_type) && (
+                            <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                              {metricTypeLabel(scenarioMetric.metric_definition?.metric_type)}
+                            </Tag>
+                          )}
+                        </Space>
                       </Button>
                     ))}
                   </Space>
@@ -1283,25 +1300,44 @@ const ExperimentWorkbenchPage: React.FC = () => {
               </Col>
               <Col xs={24} lg={11}>
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                  <Card size="small" title={selectedScenarioMetric.metric_definition?.display_name || 'Prompt 模板'}>
+                  <Card
+                    size="small"
+                    title={`${selectedScenarioMetric.metric_definition?.display_name || '指标配置'}${isSelectedExactMatch ? '（确定性匹配）' : ' · Prompt 模板'}`}
+                  >
                     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                      <Text type="secondary">
-                        默认来自场景覆盖规则；没有覆盖时来自指标定义。当前本次实验已改写 {promptOverrideCount} 个指标模板。
-                      </Text>
-                      <TextArea
-                        value={effectivePromptTemplate}
-                        onChange={(event) => updateMetricOverride(selectedScenarioMetric.metric_definition_id, {
-                          prompt_override: event.target.value,
-                        })}
-                        autoSize={{ minRows: 10, maxRows: 18 }}
-                        placeholder="在这里编辑本次实验使用的业务评判规则"
-                      />
+                      {isSelectedExactMatch ? (
+                        <>
+                          <Alert
+                            type="success"
+                            showIcon
+                            message="该指标不调用大模型"
+                            description="确定性匹配指标直接比对字段：命中期望值得 1 分，否则 0 分。要修改比对字段和期望值，请到「指标管理」编辑该指标，或在数据集里维护期望值字段。"
+                          />
+                          <Text type="secondary">
+                            当前比对配置：{describeExactMatchConfig(selectedMetricDefinition?.config)}
+                          </Text>
+                        </>
+                      ) : (
+                        <Text type="secondary">
+                          默认来自场景覆盖规则；没有覆盖时来自指标定义。当前本次实验已改写 {promptOverrideCount} 个指标模板。
+                        </Text>
+                      )}
+                      {!isSelectedExactMatch && (
+                        <TextArea
+                          value={effectivePromptTemplate}
+                          onChange={(event) => updateMetricOverride(selectedScenarioMetric.metric_definition_id, {
+                            prompt_override: event.target.value,
+                          })}
+                          autoSize={{ minRows: 10, maxRows: 18 }}
+                          placeholder="在这里编辑本次实验使用的业务评判规则"
+                        />
+                      )}
                       <Space wrap>
                         <Text>通过阈值</Text>
                         <InputNumber
                           min={0}
                           max={1}
-                          step={0.05}
+                          step={isSelectedExactMatch ? 1 : 0.05}
                           value={effectivePassThreshold}
                           placeholder="不设置"
                           onChange={(value) => updateMetricOverride(selectedScenarioMetric.metric_definition_id, {
@@ -1317,19 +1353,30 @@ const ExperimentWorkbenchPage: React.FC = () => {
                             weight: value === null ? null : Number(value),
                           })}
                         />
-                        <Button
-                          onClick={() => updateMetricOverride(selectedScenarioMetric.metric_definition_id, {
-                            prompt_override: getMetricPromptTemplate(selectedScenarioMetric),
-                            pass_threshold: selectedScenarioMetric.pass_threshold,
-                            weight: selectedScenarioMetric.weight,
-                          })}
-                        >
-                          恢复场景默认
-                        </Button>
+                        {!isSelectedExactMatch && (
+                          <Button
+                            onClick={() => updateMetricOverride(selectedScenarioMetric.metric_definition_id, {
+                              prompt_override: getMetricPromptTemplate(selectedScenarioMetric),
+                              pass_threshold: selectedScenarioMetric.pass_threshold,
+                              weight: selectedScenarioMetric.weight,
+                            })}
+                          >
+                            恢复场景默认
+                          </Button>
+                        )}
                       </Space>
                     </Space>
                   </Card>
-                  <Card size="small" title="模板渲染预览">
+                  <Card size="small" title={isSelectedExactMatch ? '比对说明' : '模板渲染预览'}>
+                    {isSelectedExactMatch && (
+                      <Alert
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: 12 }}
+                        message="本指标不渲染提示词"
+                        description="评测时会用左侧「比对配置」中的字段与期望值直接比对，右侧变量仅用于其他 LLM 指标。"
+                      />
+                    )}
                     {missingVariables.length > 0 && (
                       <Alert
                         type="warning"

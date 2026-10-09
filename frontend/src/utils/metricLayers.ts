@@ -341,16 +341,27 @@ export const METRIC_INFO: Record<string, MetricInfo> = {
   },
 };
 
-export const getMetricInfo = (name: string): MetricInfo => (
-  METRIC_INFO[name] || {
+export const getMetricInfo = (name: string, metricType?: string): MetricInfo => {
+  if (METRIC_INFO[name]) return METRIC_INFO[name];
+  if (metricType === 'exact_match') {
+    return {
+      name,
+      displayName: name,
+      shortName: '确定性匹配',
+      layerKey: 'general',
+      short: '不调用大模型，直接比对字段',
+      subjects: '确定性匹配指标：按等值 / 包含 / 正则比对「待比对字段」与「期望值」，命中得 1 分否则 0 分。不使用提示词，结果稳定可复现且无模型调用成本。',
+    };
+  }
+  return {
     name,
     displayName: name,
     shortName: name,
     layerKey: 'general',
     short: '',
     subjects: '自定义指标，请参考指标定义中的 prompt 或 definition。',
-  }
-);
+  };
+};
 
 export const getMetricLayer = (metricName: string): MetricLayer => {
   const info = getMetricInfo(metricName);

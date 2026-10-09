@@ -46,6 +46,13 @@ const metricTypeOptions = [
   { label: '0~1 数值评分 numeric（推荐）', value: 'numeric' },
   { label: '标签判断 discrete', value: 'discrete' },
   { label: '0/1 通过判断 aspect_critic', value: 'aspect_critic' },
+  { label: '确定性匹配 exact_match（不调用大模型）', value: 'exact_match' },
+];
+
+const matchModeOptions = [
+  { label: '等值 exact', value: 'exact' },
+  { label: '包含 contains', value: 'contains' },
+  { label: '正则 regex', value: 'regex' },
 ];
 
 const categoryOptions = [
@@ -60,6 +67,7 @@ const typeLabelMap: Record<string, string> = {
   numeric: '数值评分',
   discrete: '离散判断',
   aspect_critic: '维度判断',
+  exact_match: '确定性匹配',
 };
 
 const metricTypeHelp: Record<string, { message: string; description: string; type: 'info' | 'warning' | 'success' }> = {
@@ -78,6 +86,11 @@ const metricTypeHelp: Record<string, { message: string; description: string; typ
     message: '只适合是否满足的 0/1 判断',
     description: '系统要求 Judge 返回 0 或 1。业务提示词不要再写 0.8~1.0 这类连续分规则，否则系统口径和业务口径会冲突。',
   },
+  exact_match: {
+    type: 'success',
+    message: '适合"解析结果 vs 期望值"的确定性核对',
+    description: '不调用大模型，直接按等值/包含/正则比对字段，命中得 1 分否则 0 分。例如自定义解析器抽出 demandType 后，与数据集中的 expected_demand_type 做等值核对，结果稳定可复现且无 LLM 成本。',
+  },
 };
 
 const MetricListPage: React.FC = () => {
@@ -90,6 +103,13 @@ const MetricListPage: React.FC = () => {
   const [categoryFilter, setCategoryFilter] = useState<string | undefined>();
   const [form] = Form.useForm();
   const selectedType = Form.useWatch('metric_type', form) || 'numeric';
+
+  // 切换到确定性匹配时补齐默认值，避免必填项为空
+  useEffect(() => {
+    if (selectedType !== 'exact_match' || !modalOpen) return;
+    if (form.getFieldValue('field')) return;
+    form.setFieldsValue({ field: 'response', mode: 'exact', case_sensitive: 'false' });
+  }, [selectedType, modalOpen, form]);
 
   const fetchMetrics = async () => {
     setLoading(true);
@@ -132,9 +152,25 @@ const MetricListPage: React.FC = () => {
     }))
   ), [metrics]);
 
-  const openCreateModal = () => {
+  const openCreateModal = (metricType: string = 'numeric') => {
     form.resetFields();
     setEditingMetric(null);
+    if (metricType === 'exact_match') {
+      form.setFieldsValue({
+        display_name: '需求类型等值核对',
+        name: 'demand_type_exact_match',
+        metric_type: 'exact_match',
+        category: 'custom',
+        field: 'demandType',
+        expected_field: 'expected_demand_type',
+        expected_value: '',
+        mode: 'exact',
+        case_sensitive: 'false',
+        description: '比对自定义解析器抽出的 demandType 与数据集期望值是否一致',
+      });
+      setModalOpen(true);
+      return;
+    }
     form.setFieldsValue({
       display_name: '参考答案符合度',
       name: 'reference_answer_quality',
@@ -164,6 +200,11 @@ const MetricListPage: React.FC = () => {
       min_score: Array.isArray(allowedValues) ? allowedValues[0] : 0,
       max_score: Array.isArray(allowedValues) ? allowedValues[1] : 1,
       allowed_values_text: Array.isArray(allowedValues) ? allowedValues.join(',') : 'pass,fail',
+      field: config.field || 'response',
+      expected_field: config.expected_field || '',
+      expected_value: config.expected_value ?? '',
+      mode: config.mode || 'exact',
+      case_sensitive: config.case_sensitive ? 'true' : 'false',
     });
     setModalOpen(true);
   };
@@ -174,25 +215,35 @@ const MetricListPage: React.FC = () => {
       setSubmitting(true);
       const metricType = values.metric_type;
       const config =
-        metricType === 'numeric'
+        metricType === 'exact_match'
           ? {
-              prompt: values.prompt,
+              field: (values.field || 'response').trim(),
+              expected_field: (values.expected_field || '').trim(),
+              expected_value: values.expected_value ?? null,
+              mode: values.mode || 'exact',
+              case_sensitive: values.case_sensitive === true || values.case_sensitive === 'true',
+              strip_whitespace: true,
               description: values.description,
-              allowed_values: [Number(values.min_score ?? 0), Number(values.max_score ?? 1)],
             }
-          : metricType === 'discrete'
+          : metricType === 'numeric'
             ? {
                 prompt: values.prompt,
                 description: values.description,
-                allowed_values: String(values.allowed_values_text || 'pass,fail')
-                  .split(',')
-                  .map((item) => item.trim())
-                  .filter(Boolean),
+                allowed_values: [Number(values.min_score ?? 0), Number(values.max_score ?? 1)],
               }
-            : {
-                definition: values.prompt,
-                description: values.description,
-              };
+            : metricType === 'discrete'
+              ? {
+                  prompt: values.prompt,
+                  description: values.description,
+                  allowed_values: String(values.allowed_values_text || 'pass,fail')
+                    .split(',')
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                }
+              : {
+                  definition: values.prompt,
+                  description: values.description,
+                };
 
       const payload = {
         name: values.name,
@@ -296,7 +347,7 @@ const MetricListPage: React.FC = () => {
           <Title level={4} style={{ marginBottom: 4 }}>指标管理</Title>
           <Text type="secondary">管理可复用的评测指标和默认评分规则。场景管理可按业务需要覆盖这里的默认规则。</Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreateModal()}>
           新建自定义指标
         </Button>
       </Space>
@@ -408,21 +459,67 @@ const MetricListPage: React.FC = () => {
             </Form.Item>
           )}
 
-          <Form.Item
-            name="prompt"
-            label={selectedType === 'aspect_critic' ? '默认判断定义' : '默认评分规则'}
-            extra="这是指标的默认规则；在场景管理里留空时会使用这里的规则，填写场景覆盖规则时会被替代。"
-            rules={[{ required: true, message: '请填写默认评分规则' }]}
-          >
-            <TextArea autoSize={{ minRows: 12, maxRows: 20 }} />
-          </Form.Item>
+          {selectedType === 'exact_match' && (
+            <Space align="start" wrap size={16}>
+              <Form.Item
+                name="field"
+                label="待比对字段"
+                rules={[{ required: true, message: '请填写待比对字段' }]}
+                style={{ width: 220 }}
+              >
+                <Input placeholder="demandType" />
+              </Form.Item>
+              <Form.Item
+                name="expected_field"
+                label="期望值字段（数据集）"
+                extra="与「固定期望值」二选一，都为空时默认用 reference"
+                style={{ width: 240 }}
+              >
+                <Input placeholder="expected_demand_type" />
+              </Form.Item>
+              <Form.Item name="expected_value" label="固定期望值（可选）" style={{ width: 220 }}>
+                <Input placeholder="室外装修" />
+              </Form.Item>
+              <Form.Item name="mode" label="匹配模式" rules={[{ required: true }]} style={{ width: 160 }}>
+                <Select options={matchModeOptions} />
+              </Form.Item>
+              <Form.Item name="case_sensitive" label="区分大小写" style={{ width: 140 }}>
+                <Select
+                  options={[
+                    { label: '不区分', value: 'false' },
+                    { label: '区分', value: 'true' },
+                  ]}
+                />
+              </Form.Item>
+            </Space>
+          )}
 
-          <Alert
-            type="success"
-            showIcon
-            message="变量说明"
-            description="提示词支持使用 {user_input}、{reference}、{rubrics}、{response} 等字段变量。接口实时评测会先调用被测接口得到 response，再交给该指标评分。"
-          />
+          {selectedType !== 'exact_match' && (
+            <Form.Item
+              name="prompt"
+              label={selectedType === 'aspect_critic' ? '默认判断定义' : '默认评分规则'}
+              extra="这是指标的默认规则；在场景管理里留空时会使用这里的规则，填写场景覆盖规则时会被替代。"
+              rules={[{ required: true, message: '请填写默认评分规则' }]}
+            >
+              <TextArea autoSize={{ minRows: 12, maxRows: 20 }} />
+            </Form.Item>
+          )}
+
+          {selectedType === 'exact_match' ? (
+            <Alert
+              type="success"
+              showIcon
+              message="确定性匹配说明"
+              description="该指标不调用大模型：命中期望值得 1 分，否则 0 分。待比对字段可以是自定义解析器抽出的字段（如 demandType），也可以是路径映射抽出的 response；比较前默认去除首尾空白。"
+            />
+          ) : (
+            <Alert
+              type="success"
+              showIcon
+              message="变量说明"
+              description="提示词支持使用 {user_input}、{reference}、{rubrics}、{response} 等字段变量。接口实时评测会先调用被测接口得到 response，再交给该指标评分。"
+            />
+          )}
         </Form>
       </Modal>
     </Spin>

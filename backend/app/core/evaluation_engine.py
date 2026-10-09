@@ -413,6 +413,94 @@ class StepEfficiencyMetric:
         )
 
 
+class ExactMatchMetric:
+    """确定性匹配指标：不调用大模型，按等值/包含/正则比对字段，命中得 1 分否则 0 分。
+
+    config 约定：
+    - field: 待比对字段名，默认 response（可由自定义解析器抽取，如 demandType）
+    - expected_field: 数据集中期望值字段名，默认 reference；与 expected_value 二选一
+    - expected_value: 固定期望值（不依赖数据集字段时使用）
+    - mode: exact（等值，默认）/ contains（包含）/ regex（正则匹配）
+    - case_sensitive: 是否区分大小写，默认 False
+    - strip_whitespace: 是否先去除首尾空白，默认 True
+    """
+
+    MODES = ("exact", "contains", "regex")
+    MODE_LABELS = {"exact": "等值", "contains": "包含", "regex": "正则"}
+
+    def __init__(self, config: dict | None = None):
+        config = config or {}
+        self.field = str(config.get("field") or "response").strip()
+        self.expected_field = str(config.get("expected_field") or "").strip()
+        self.expected_value = config.get("expected_value")
+        if not self.expected_field and self.expected_value is None:
+            self.expected_field = "reference"
+        mode = str(config.get("mode") or "exact").strip()
+        self.mode = mode if mode in self.MODES else "exact"
+        self.case_sensitive = bool(config.get("case_sensitive", False))
+        self.strip_whitespace = bool(config.get("strip_whitespace", True))
+        self.required_fields = [self.field]
+        if self.expected_field:
+            self.required_fields.append(self.expected_field)
+
+    @classmethod
+    def _to_text(cls, value: t.Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (list, dict)):
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return str(value)
+
+    def _normalize(self, value: t.Any) -> str:
+        text = self._to_text(value)
+        if self.strip_whitespace:
+            text = text.strip()
+        if not self.case_sensitive:
+            text = text.lower()
+        return text
+
+    def score(self, actual: t.Any, expected: t.Any) -> _MetricResult:
+        label = self.MODE_LABELS.get(self.mode, self.mode)
+        actual_text = self._to_text(actual)
+        expected_text = self._to_text(expected)
+        if actual is None or actual_text == "":
+            return _MetricResult(None, f"缺少待比对字段 {self.field} 的值，无法计算匹配度。")
+        if expected is None or expected_text == "":
+            target = self.expected_field or "expected_value"
+            return _MetricResult(None, f"缺少期望值（{target}），无法计算匹配度。")
+
+        normalized_actual = self._normalize(actual_text)
+        normalized_expected = self._normalize(expected_text)
+
+        if self.mode == "contains":
+            matched = normalized_expected in normalized_actual
+            detail = f"期望值是否包含在 {self.field} 中"
+        elif self.mode == "regex":
+            try:
+                flags = 0 if self.case_sensitive else re.IGNORECASE
+                matched = re.search(expected_text, actual_text, flags) is not None
+            except re.error as exc:
+                return _MetricResult(None, f"期望值不是合法正则: {exc}")
+            detail = f"期望正则是否匹配 {self.field}"
+        else:
+            matched = normalized_actual == normalized_expected
+            detail = f"{self.field} 是否等于期望值"
+
+        score = 1.0 if matched else 0.0
+        reason = (
+            f"{detail}：{'通过' if matched else '不通过'}。"
+            f"实际值={actual_text[:200]!r}，期望值={expected_text[:200]!r}，匹配模式={label}。"
+        )
+        return _MetricResult(score, reason)
+
+    async def ascore(self, row_data: dict[str, t.Any], _judge: OpenAIJudgeClient) -> _MetricResult:
+        actual = row_data.get(self.field)
+        expected = row_data.get(self.expected_field) if self.expected_field else self.expected_value
+        return self.score(actual, expected)
+
+
 def build_metric(
     metric_def,
     llm=None,
@@ -457,6 +545,9 @@ def build_metric(
     if metric_type == "builtin_step_efficiency":
         return ("simple", StepEfficiencyMetric())
 
+    if metric_type == "exact_match":
+        return ("simple", ExactMatchMetric(config))
+
     if metric_type in {"numeric", "discrete", "aspect_critic"}:
         return (
             "llm",
@@ -474,6 +565,9 @@ def build_metric(
 
 def get_metric_prompt_template(metric_def, prompt_override: str | None = None) -> str:
     """Return the business-owned prompt text used by a configurable metric."""
+    # 确定性匹配指标不使用提示词，避免把指标说明当成提示词展示或诊断
+    if getattr(metric_def, "metric_type", None) == "exact_match":
+        return ""
     config = metric_def.config or {}
     override = (prompt_override or "").strip()
     if override:
@@ -534,6 +628,32 @@ def diagnose_metric_prompt(
     metric_type = metric_def.metric_type
     template = get_metric_prompt_template(metric_def, prompt_override)
     normalized = template.replace("～", "~")
+
+    if metric_type == "exact_match":
+        config = metric_def.config or {}
+        field = str(config.get("field") or "response").strip()
+        expected_field = str(config.get("expected_field") or "").strip()
+        expected_value = config.get("expected_value")
+        if expected_field:
+            if not row_data.get(expected_field):
+                warnings.append(
+                    f"确定性匹配指标 [{metric_def.display_name}] 的期望值字段 {expected_field} 在当前样本为空，该条无法评分。"
+                )
+        elif expected_value in (None, ""):
+            if not row_data.get("reference"):
+                warnings.append(
+                    f"确定性匹配指标 [{metric_def.display_name}] 未配置期望值字段或固定期望值，且当前样本没有 reference，该条无法评分。"
+                )
+        if not row_data.get(field):
+            warnings.append(
+                f"确定性匹配指标 [{metric_def.display_name}] 的待比对字段 {field} 在当前样本为空，"
+                "请检查响应字段映射或自定义解析器是否正确抽取该字段。"
+            )
+        if (prompt_override or "").strip():
+            warnings.append(
+                f"确定性匹配指标 [{metric_def.display_name}] 不调用大模型，业务提示词对该指标无效，实际不会生效。"
+            )
+        return warnings
 
     if metric_type == "aspect_critic" and _DECIMAL_SCORE_RANGE_RE.search(normalized):
         warnings.append(
@@ -1065,7 +1185,7 @@ def _metric_score_range(metric_def) -> str | None:
     if metric_type == "discrete":
         allowed = config.get("allowed_values") or ["pass", "fail"]
         return " / ".join(str(item) for item in allowed)
-    if metric_type == "aspect_critic":
+    if metric_type in {"aspect_critic", "exact_match"}:
         return "0 或 1"
     return "0 到 1"
 

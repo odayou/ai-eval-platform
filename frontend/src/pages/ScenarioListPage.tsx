@@ -31,6 +31,7 @@ import type { EvalScenario, MetricDefinition } from '../types';
 import * as api from '../services/api';
 import { MetricHelpButton, MetricHelpIcon, MetricHelpDrawer } from '../components/MetricHelpDrawer';
 import { getMetricInfo, getMetricLayer, getMetricLayerIndex, groupMetricNames, isMetricAvailableForScene } from '../utils/metricLayers';
+import { describeExactMatchConfig, isDeterministicMetricType, isExactMatchMetricType, metricTypeLabel } from '../utils/metricTypes';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -96,6 +97,7 @@ const ScenarioListPage: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
   const [helpMetric, setHelpMetric] = useState<string | null>(null);
+  const [helpMetricType, setHelpMetricType] = useState<string | null>(null);
   const [selectedSceneType, setSelectedSceneType] = useState<string>('rag');
   const [selectedMetrics, setSelectedMetrics] = useState<SelectedMetric[]>([]);
 
@@ -372,7 +374,15 @@ const ScenarioListPage: React.FC = () => {
         <Title level={4} style={{ margin: 0 }}>场景管理</Title>
         <MetricHelpButton />
       </div>
-      <MetricHelpDrawer open={!!helpMetric} metricName={helpMetric} onClose={() => setHelpMetric(null)} />
+      <MetricHelpDrawer
+        open={!!helpMetric}
+        metricName={helpMetric}
+        metricType={helpMetricType}
+        onClose={() => {
+          setHelpMetric(null);
+          setHelpMetricType(null);
+        }}
+      />
 
       <Title level={5} style={{ marginTop: 24 }}>预置模板</Title>
       <Row gutter={16} style={{ marginBottom: 32 }}>
@@ -529,7 +539,7 @@ const ScenarioListPage: React.FC = () => {
                 showIcon
                 style={{ marginBottom: 12 }}
                 message="这里填写场景覆盖规则"
-                description="指标管理里维护默认评分规则；这里留空时使用指标默认规则，填写后只在当前场景覆盖该指标规则。适合写当前业务线、接口版本或测试目标的特殊扣分/通过标准。系统仍会统一要求评测模型返回 score 和 reason。"
+                description="指标管理里维护默认评分规则；这里留空时使用指标默认规则，填写后只在当前场景覆盖该指标规则。适合写当前业务线、接口版本或测试目标的特殊扣分/通过标准。LLM 类指标仍会统一要求评测模型返回 score 和 reason；确定性匹配（exact_match）等不调用大模型的指标无需填写规则。"
               />
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
                 {groupMetricNames(selectedMetrics.map((sm) => metrics.find((m) => m.id === sm.metric_definition_id)?.name || '').filter(Boolean)).map((group) => (
@@ -556,7 +566,17 @@ const ScenarioListPage: React.FC = () => {
                           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
                             <span style={{ width: 220, flexShrink: 0 }}>
                               {def.display_name}
-                              <MetricHelpIcon metricName={def.name} onClick={() => setHelpMetric(def.name)} />
+                              <MetricHelpIcon
+                                metricName={def.name}
+                                metricType={def.metric_type}
+                                onClick={() => {
+                                  setHelpMetric(def.name);
+                                  setHelpMetricType(def.metric_type || null);
+                                }}
+                              />
+                              <Tag color={isDeterministicMetricType(def.metric_type) ? 'green' : 'blue'} style={{ marginLeft: 6 }}>
+                                {metricTypeLabel(def.metric_type)}
+                              </Tag>
                             </span>
                             <span>权重:</span>
                             <InputNumber
@@ -577,19 +597,30 @@ const ScenarioListPage: React.FC = () => {
                               placeholder="可选"
                               style={{ width: 80 }}
                             />
-                            {sm.prompt_override && <Tag color="processing">已覆盖默认规则</Tag>}
-                          </div>
-                          <Input.TextArea
-                            rows={3}
-                            allowClear
-                            placeholder="可选：填写该指标在当前场景下的覆盖规则。例如当前业务必须覆盖哪些规则、哪些情况必须扣分、低于多少分算失败。留空则使用指标管理中的默认评分规则。"
-                            value={sm.prompt_override || ''}
-                            onChange={(e) => setSelectedMetrics((prev) =>
-                              prev.map((m) => m.metric_definition_id === sm.metric_definition_id
-                                ? { ...m, prompt_override: e.target.value || null }
-                                : m)
+                            {sm.prompt_override && !isExactMatchMetricType(def.metric_type) && (
+                              <Tag color="processing">已覆盖默认规则</Tag>
                             )}
-                          />
+                          </div>
+                          {isExactMatchMetricType(def.metric_type) ? (
+                            <Alert
+                              type="success"
+                              showIcon
+                              message="确定性匹配指标，无需填写规则"
+                              description={`当前比对配置：${describeExactMatchConfig(def.config)}。该指标不调用大模型，命中得 1 分否则 0 分；要修改比对字段请到「指标管理」编辑。`}
+                            />
+                          ) : (
+                            <Input.TextArea
+                              rows={3}
+                              allowClear
+                              placeholder="可选：填写该指标在当前场景下的覆盖规则。例如当前业务必须覆盖哪些规则、哪些情况必须扣分、低于多少分算失败。留空则使用指标管理中的默认评分规则。"
+                              value={sm.prompt_override || ''}
+                              onChange={(e) => setSelectedMetrics((prev) =>
+                                prev.map((m) => m.metric_definition_id === sm.metric_definition_id
+                                  ? { ...m, prompt_override: e.target.value || null }
+                                  : m)
+                              )}
+                            />
+                          )}
                         </div>
                       );
                     })}

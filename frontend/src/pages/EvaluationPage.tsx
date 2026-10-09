@@ -32,6 +32,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import type { EvalTask, Dataset, EndpointTarget, EvalScenario, LLMConfig } from '../types';
 import * as api from '../services/api';
+import { getMetricRequiredFields, isDeterministicMetricType, metricTypeLabel } from '../utils/metricTypes';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -368,7 +369,8 @@ const EvaluationPage: React.FC = () => {
     const requiredFields = new Set<string>();
     (scenario.metrics || []).forEach((scenarioMetric) => {
       const metricName = scenarioMetric.metric_definition?.name;
-      const fields = metricName ? metricRequiredFields[metricName] || [] : [];
+      const fields = getMetricRequiredFields(scenarioMetric.metric_definition)
+        .concat(metricName ? metricRequiredFields[metricName] || [] : []);
       fields.forEach((field) => requiredFields.add(field));
     });
     const producedFields = getEndpointProducedFields();
@@ -1012,7 +1014,9 @@ const EvaluationPage: React.FC = () => {
                     title={
                       <Space wrap>
                         <Text strong>{trace.metric_display_name || trace.metric_name}</Text>
-                        <Tag>{trace.metric_type}</Tag>
+                        <Tag color={isDeterministicMetricType(trace.metric_type) ? 'green' : 'default'}>
+                          {metricTypeLabel(trace.metric_type)}
+                        </Tag>
                         {trace.parsed_result?.score !== undefined && (
                           <Tag color={trace.parsed_result?.score == null ? 'red' : 'blue'}>
                             score: {String(trace.parsed_result?.score)}

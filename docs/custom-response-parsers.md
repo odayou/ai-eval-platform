@@ -159,6 +159,32 @@ def parse(raw_text, parsed_response, extracted=None):
 - 开启**回写模式（write_back）**时，抽取字段会保存进数据集行，便于后续复用和报告追溯；
 - 内置字段 `response`、`retrieved_contexts`、`tool_calls`、`retrieved_context_ids` 与路径映射语义一致。
 
+### 3.6 与确定性匹配指标（exact_match）配合
+
+如果你的诉求是"**数据 → 模型 → 结果 → 解析 → 核对匹配度**"，而不是让大模型打相似度分，那么把自定义解析器和确定性匹配指标串起来即可，全程不调用 Judge 模型。
+
+```text
+数据集（user_input + 期望值字段）
+  → 调用被测接口
+  → 宽松 JSON 清洗
+  → 路径映射抽取 response
+  → 自定义解析器抽出结构化字段（如 demandType）
+  → exact_match 指标：demandType vs expected_demand_type → 1 / 0
+  → 报告 + 可选人工复核
+```
+
+配置步骤：
+
+1. **数据集**：每行准备期望值字段，如 `expected_demand_type: 室外装修`；
+2. **被测接口**：`response_path: response` + 自定义解析器（如 `key_value_fields`）；
+3. **指标**：指标管理 → 新建 → 类型选「确定性匹配 exact_match（不调用大模型）」，`field=demandType`、`expected_field=expected_demand_type`、`mode=exact`；
+4. **场景**：只启用该指标，不勾选任何 LLM 指标；
+5. 执行评测，报告中每条显示 0/1 结果和比对理由（`实际值=… 期望值=… 匹配模式=等值`）。
+
+> 匹配模式说明：`exact` 等值（默认，比较前去除首尾空白、默认不区分大小写）、`contains` 期望值是否被实际值包含、`regex` 期望值作为正则去匹配实际值。
+
+更多原理与注意事项见 [评测指南 3.1.1 确定性匹配指标](evaluation-guide.md#311-确定性匹配指标exact_match不调用大模型)。
+
 ---
 
 ## 四、注意事项

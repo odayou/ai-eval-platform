@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Form, Input, InputNumber, Modal, Select, Space, message } from 'antd';
 import type { EvalScenario, MetricDefinition } from '../../types';
 import * as api from '../../services/api';
+import { metricTypeLabel } from '../../utils/metricTypes';
 
 const sceneTypeOptions = [
   { label: 'RAG', value: 'rag' },
@@ -119,7 +120,7 @@ const ScenarioQuickCreateModal: React.FC<ScenarioQuickCreateModalProps> = ({
             }
             placeholder="选择指标"
             options={metrics.map((metric) => ({
-              label: `${metric.display_name} · ${metric.name} · ${metric.category} · ${metric.metric_type}`,
+              label: `${metric.display_name} · ${metric.name} · ${metric.category} · ${metricTypeLabel(metric.metric_type)}`,
               value: metric.id,
               searchText: getMetricSearchText(metric),
             }))}

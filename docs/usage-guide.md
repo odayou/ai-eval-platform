@@ -441,6 +441,45 @@ curl -X POST http://localhost:8000/api/metrics \
 | 维度评判 | `aspect_critic` | LLM 按自定义标准做二值判断 | 0 或 1 |
 | 离散评分 | `discrete` | LLM 从预定义选项中选择 | "pass"/"fail" 等 |
 | 数值评分 | `numeric` | LLM 给出数值评分 | 0.0 ~ 1.0 |
+| 确定性匹配 | `exact_match` | **不调用 LLM**，直接按等值/包含/正则比对字段 | 0 或 1 |
+
+### 4.2.1 确定性匹配指标配置示例
+
+适合"接口结果 → 解析 → 与期望值核对"的场景。例如自定义解析器从回答中抽出 `demandType`，与数据集里的 `expected_demand_type` 做等值核对：
+
+```json
+{
+  "name": "demand_type_exact_match",
+  "display_name": "需求类型等值核对",
+  "metric_type": "exact_match",
+  "category": "custom",
+  "config": {
+    "field": "demandType",
+    "expected_field": "expected_demand_type",
+    "mode": "exact",
+    "case_sensitive": false,
+    "strip_whitespace": true
+  }
+}
+```
+
+也可以不依赖数据集字段，用固定期望值：
+
+```json
+{
+  "name": "answer_prefix_match",
+  "metric_type": "exact_match",
+  "config": {
+    "field": "response",
+    "expected_value": "室外装修",
+    "mode": "contains"
+  }
+}
+```
+
+**判定口径**：命中得 `1`，未命中得 `0`；待比对字段或期望值为空时该条标记为"无法评分"（不是 0 分）。
+
+**提示**：该类型不需要填写任何提示词；若场景中只启用这类指标和检索/工具调用类确定性指标，则整条评测链路不会调用 Judge 模型。详见 [自定义响应解析器指南](custom-response-parsers.md#36-与确定性匹配指标exact_match配合)。
 
 ### 4.3 内置指标一览
 

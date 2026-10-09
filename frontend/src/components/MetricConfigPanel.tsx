@@ -1,6 +1,7 @@
 import React from 'react';
 import { Checkbox, InputNumber, Tag, Space, Typography } from 'antd';
 import type { MetricDefinition } from '../types';
+import { isDeterministicMetricType, isExactMatchMetricType, metricTypeLabel } from '../utils/metricTypes';
 
 const { Text } = Typography;
 
@@ -95,6 +96,9 @@ const MetricConfigPanel: React.FC<MetricConfigPanelProps> = ({
                 <Space>
                   <Text strong>{metric.display_name}</Text>
                   <Tag color="blue">{metric.category}</Tag>
+                  {isDeterministicMetricType(metric.metric_type) && (
+                    <Tag color="green">{metricTypeLabel(metric.metric_type)}</Tag>
+                  )}
                 </Space>
               </Checkbox>
 
@@ -114,7 +118,7 @@ const MetricConfigPanel: React.FC<MetricConfigPanelProps> = ({
                   <InputNumber
                     min={0}
                     max={1}
-                    step={0.05}
+                    step={isExactMatchMetricType(metric.metric_type) ? 1 : 0.05}
                     value={selectedItem.pass_threshold ?? undefined}
                     onChange={(v) => handleThresholdChange(metric.id, v)}
                     placeholder="可选"

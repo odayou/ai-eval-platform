@@ -16,6 +16,7 @@ import {
 import { DeleteOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import type { Dataset, DatasetRow, FieldDefinition, PaginatedResponse } from '../../types';
 import * as api from '../../services/api';
+import FieldLabel from '../FieldLabel';
 
 const { Text } = Typography;
 
@@ -176,7 +177,7 @@ const DatasetRowsPanel: React.FC<DatasetRowsPanelProps> = ({
   };
 
   const dataColumns = fieldSchema.map((field) => ({
-    title: field.name,
+    title: <FieldLabel field={field} showType={false} />,
     dataIndex: ['data', field.name],
     key: field.name,
     ellipsis: true,
@@ -278,14 +279,8 @@ const DatasetRowsPanel: React.FC<DatasetRowsPanelProps> = ({
             <Form.Item
               key={field.name}
               name={field.name}
-              label={
-                <Space>
-                  <span>{field.name}</span>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    ({field.type})
-                  </Text>
-                </Space>
-              }
+              label={<FieldLabel field={field} />}
+              tooltip={field.description || undefined}
               rules={field.required ? [{ required: true, message: `请输入 ${field.name}` }] : []}
             >
               {renderFieldInput(field)}
