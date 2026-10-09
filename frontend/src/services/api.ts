@@ -81,6 +81,12 @@ export const deleteMetric = (id: number) => api.delete(`/metrics/${id}`);
 // ======================== Endpoint Targets ========================
 
 export const listEndpointTargets = () => api.get('/endpoint-targets').then(r => r.data);
+export const listCustomParsers = () => api.get('/endpoint-targets/parsers').then(r => r.data);
+export const getCustomParser = (name: string) => api.get(`/endpoint-targets/parsers/${name}`).then(r => r.data);
+export const createCustomParser = (data: { name: string; code: string }) => api.post('/endpoint-targets/parsers', data).then(r => r.data);
+export const updateCustomParser = (name: string, data: { code: string }) => api.put(`/endpoint-targets/parsers/${name}`, data).then(r => r.data);
+export const deleteCustomParser = (name: string) => api.delete(`/endpoint-targets/parsers/${name}`);
+export const testCustomParser = (data: { name?: string; code?: string; raw_text: string; parsed_response?: string }) => api.post('/endpoint-targets/parsers/test', data).then(r => r.data);
 export const createEndpointTarget = (data: any) => api.post('/endpoint-targets', data).then(r => r.data);
 export const updateEndpointTarget = (id: number, data: any) => api.put(`/endpoint-targets/${id}`, data).then(r => r.data);
 export const deleteEndpointTarget = (id: number) => api.delete(`/endpoint-targets/${id}`);

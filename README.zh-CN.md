@@ -254,6 +254,7 @@ proxy: {
 
 - [使用指南](docs/usage-guide.md)
 - [评测指南](docs/evaluation-guide.md)
+- [自定义响应解析器指南](docs/custom-response-parsers.md)
 - [开源发布检查清单](docs/open-source-readiness.md)
 - [数据库与存储选型](docs/database-and-storage.md)
 - [同类项目对比](docs/comparison.md)

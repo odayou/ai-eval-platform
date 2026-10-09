@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Col, Descriptions, Divider, Form, Input, Modal, Row, Select, Space, Typography, message } from 'antd';
-import { ExperimentOutlined } from '@ant-design/icons';
+import { ExperimentOutlined, SettingOutlined } from '@ant-design/icons';
 import type { EndpointTarget } from '../../types';
 import * as api from '../../services/api';
+import CustomParserManagerModal from './CustomParserManagerModal';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -68,9 +69,16 @@ const EndpointTargetModal: React.FC<EndpointTargetModalProps> = ({ open, target,
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [parsers, setParsers] = useState<{ name: string; description: string }[]>([]);
+  const [parserManagerOpen, setParserManagerOpen] = useState(false);
+
+  const reloadParsers = useCallback(() => {
+    api.listCustomParsers().then(setParsers).catch(() => setParsers([]));
+  }, []);
 
   useEffect(() => {
     if (!open) return;
+    reloadParsers();
     if (target) {
       form.setFieldsValue({
         ...target,
@@ -264,13 +272,37 @@ const EndpointTargetModal: React.FC<EndpointTargetModalProps> = ({ open, target,
             </Form.Item>
           </Col>
         </Row>
+        <Row gutter={16}>
+          <Col span={8}>
+            <Form.Item name={['response_mapping', 'custom_parser']} label="自定义解析器">
+              <Select
+                allowClear
+                placeholder="选择自定义解析器"
+                options={parsers.map(p => ({ label: p.name, value: p.name, title: p.description }))}
+                notFoundContent="暂无可用解析器"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={4}>
+            <Form.Item label=" " colon={false}>
+              <Button icon={<SettingOutlined />} onClick={() => setParserManagerOpen(true)}>
+                管理解析器
+              </Button>
+            </Form.Item>
+          </Col>
+        </Row>
         <Alert
           type="info"
           showIcon
           message="字段映射使用点路径，数组下标用数字"
-          description="例如 OpenAI 兼容接口的回答字段是 choices.0.message.content；httpbin 回显请求体时可以填 json.question。"
+          description="例如 OpenAI 兼容接口的回答字段是 choices.0.message.content；响应不是合法 JSON 时系统会自动剥离 markdown 围栏并提取 JSON 子串；自定义解析器返回的字段会覆盖路径抽取结果并合并进评测行数据。"
         />
       </Form>
+      <CustomParserManagerModal
+        open={parserManagerOpen}
+        onCancel={() => setParserManagerOpen(false)}
+        onChanged={reloadParsers}
+      />
     </Modal>
   );
 };

@@ -267,6 +267,24 @@ h5.ant-typography {
   color: #94a3b8;
 }
 
+.parser-list-item {
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.parser-code-editor .cm-editor {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.parser-code-editor .cm-editor.cm-focused {
+  border-color: #2563eb;
+  outline: none;
+}
+
 .eval-create-actions {
   display: flex;
   justify-content: flex-end;

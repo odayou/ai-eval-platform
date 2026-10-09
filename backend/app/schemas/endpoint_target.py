@@ -63,3 +63,25 @@ class EndpointTargetTestResponse(BaseModel):
     raw_response: Optional[str] = None
     extracted_fields: Optional[Dict[str, Any]] = None
     mapping_errors: Optional[Dict[str, str]] = None
+
+
+class CustomParserSaveRequest(BaseModel):
+    name: str
+    code: str
+
+
+class CustomParserUpdateRequest(BaseModel):
+    code: str
+
+
+class CustomParserTestRequest(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    raw_text: str = ""
+    parsed_response: Optional[str] = None
+
+
+class CustomParserTestResponse(BaseModel):
+    success: bool
+    result: Optional[Any] = None
+    error: Optional[str] = None

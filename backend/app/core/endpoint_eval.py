@@ -6,6 +6,7 @@ import typing as t
 
 import httpx
 
+from app.core.parser_loader import get_parser
 from app.core.prompt_manager import (
     DEFAULT_ENDPOINT_BODY_TEMPLATE,
     DEFAULT_RESPONSE_PATH,
@@ -136,7 +137,95 @@ def extract_eval_fields(
 
     if "response" not in extracted and isinstance(raw_text, str) and raw_text.strip():
         extracted["response"] = raw_text.strip()
+        errors.pop("response", None)
+
+    parser_name = str(mapping.get("custom_parser") or "").strip()
+    if parser_name:
+        parser = get_parser(parser_name)
+        if parser is None:
+            errors["custom_parser"] = f"自定义解析器不存在: {parser_name}"
+        else:
+            try:
+                result = parser(raw_text or "", parsed, dict(extracted))
+                if isinstance(result, dict):
+                    for key, value in result.items():
+                        if value is not None:
+                            key = str(key)
+                            extracted[key] = value
+                            errors.pop(key, None)
+                elif result is not None:
+                    extracted["response"] = result
+                    errors.pop("response", None)
+            except Exception as exc:
+                errors["custom_parser"] = f"自定义解析器执行失败: {exc}"
+
     return extracted, errors
+
+
+def strip_code_fences(text: str) -> str:
+    """剥离 markdown 代码围栏（```json ... ``` 等），无围栏时原样返回。"""
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return text
+    lines = stripped.splitlines()
+    if len(lines) >= 2 and lines[0].startswith("```"):
+        if lines[-1].strip().startswith("```"):
+            lines = lines[1:-1]
+        else:
+            lines = lines[1:]
+        return "\n".join(lines).strip()
+    return text
+
+
+def extract_json_candidate(text: str) -> t.Any:
+    """从含杂质的文本中用括号匹配提取第一个完整的 JSON 对象/数组并解析。"""
+    for open_char, close_char in (("{", "}"), ("[", "]")):
+        start = text.find(open_char)
+        if start < 0:
+            continue
+        depth = 0
+        in_string = False
+        escaped = False
+        for idx in range(start, len(text)):
+            char = text[idx]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == open_char:
+                depth += 1
+            elif char == close_char:
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : idx + 1]
+                    try:
+                        return json.loads(candidate)
+                    except Exception:
+                        break
+    return None
+
+
+def parse_json_loose(text: str | None) -> t.Any:
+    """宽松 JSON 解析：直接解析 → 剥离代码围栏 → 括号匹配提取子串。"""
+    if not text or not text.strip():
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    cleaned = strip_code_fences(text)
+    if cleaned != text:
+        try:
+            return json.loads(cleaned)
+        except Exception:
+            pass
+    return extract_json_candidate(cleaned)
 
 
 async def _invoke_json(
@@ -151,12 +240,12 @@ async def _invoke_json(
     parsed_response: t.Any = None
     content_type = (response.headers.get("content-type") or "").lower()
     if "application/json" in content_type:
-        parsed_response = response.json()
+        parsed_response = parse_json_loose(raw_text)
     else:
         try:
             parsed_response = response.json()
         except Exception:
-            parsed_response = None
+            parsed_response = parse_json_loose(raw_text)
     answer = _first_path(parsed_response, ["answer", "data.answer", "choices.0.message.content"])
     return {
         "status_code": response.status_code,
