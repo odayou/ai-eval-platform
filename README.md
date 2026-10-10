@@ -12,6 +12,16 @@ Self-hosted AI evaluation workbench for RAG, AI Agents, multi-turn conversations
 
 AI Evaluation Platform helps teams evaluate LLM applications as an engineering workflow instead of a one-off metric script. It connects dataset management, scenario presets, native metrics, OpenAI-compatible judge models, live endpoint evaluation, report analysis, manual review, and A/B blind testing in one Web UI.
 
+## About this fork
+
+This project is forked from [huangyiminghappy/ai-eval-platform](https://github.com/huangyiminghappy/ai-eval-platform) (commit 544cc1ae878cba15b83259091111818a2d57b54d)with the following main enhancements:
+
+- New deterministic metric `exact_match` (exact / contains / regex); deterministic scenarios no longer call the Judge LLM
+- Dataset clone (with field schema and rows) and editing; field schema changes are blocked once the dataset has rows
+- TLS certificate verification toggle for evaluated endpoints
+- Improved evaluation run logs: full raw response, field extraction, and deterministic matching details for easier troubleshooting
+- Shared utilities for custom response parsers, so a new parser only needs to implement its own processing logic
+
 ## Screenshots
 
 ### Evaluation Workbench

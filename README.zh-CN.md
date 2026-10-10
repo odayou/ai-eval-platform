@@ -12,6 +12,16 @@
 
 AI Evaluation Platform 帮助团队把大模型应用评测做成可复用的工程流程，而不是一次性的指标脚本。平台把数据集管理、评测场景、原生指标、OpenAI 兼容 Judge 模型、被测接口实时评测、报告分析、人工复核和 A/B 盲测串在一个 Web UI 里。
 
+## Fork 说明
+
+本项目 Fork 自 [huangyiminghappy/ai-eval-platform](https://github.com/huangyiminghappy/ai-eval-platform)，在commit 544cc1ae878cba15b83259091111818a2d57b54d基础上做了以下主要增强：
+
+- 新增确定性匹配指标 exact_match（等值 / 包含 / 正则），确定性场景不再调用 Judge LLM
+- 数据集支持克隆（含字段定义与数据行）与编辑信息及数据架构，非空数据集禁止修改字段结构
+- 被测接口支持 TLS 证书校验开关
+- 评测执行日志增强：完整记录响应原文、字段抽取与确定性匹配取值过程，便于排查
+- 自定义响应解析器提供通用工具库，新建解析器只需实现内容加工逻辑
+
 ## 界面预览
 
 ### 评测实验工作台
