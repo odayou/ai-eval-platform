@@ -20,6 +20,7 @@ import {
   ArrowLeftOutlined,
   PlusOutlined,
   DeleteOutlined,
+  CopyOutlined,
   UploadOutlined,
   DownloadOutlined,
 } from '@ant-design/icons';
@@ -165,6 +166,17 @@ const DatasetDetailPage: React.FC = () => {
     }
   };
 
+  const handleCloneRow = async (rowId: number) => {
+    try {
+      await api.cloneDatasetRow(datasetId, rowId, 1);
+      message.success('已克隆该行');
+      fetchRows();
+      fetchDataset();
+    } catch {
+      message.error('克隆失败');
+    }
+  };
+
   const handleImportSuccess = () => {
     setImportModalOpen(false);
     fetchRows();
@@ -237,11 +249,19 @@ const DatasetDetailPage: React.FC = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 80,
+      width: 120,
       render: (_: unknown, record: DatasetRow) => (
-        <Popconfirm title="确认删除此行？" onConfirm={() => handleDeleteRow(record.id)}>
-          <Button size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
+        <Space size={4}>
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => handleCloneRow(record.id)}
+            title="克隆此行，追加到数据集末尾"
+          />
+          <Popconfirm title="确认删除此行？" onConfirm={() => handleDeleteRow(record.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
       ),
     },
   ];

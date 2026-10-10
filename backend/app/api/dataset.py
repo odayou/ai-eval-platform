@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.dataset import Dataset, DatasetRow
 from app.schemas.dataset import (
+    DatasetCloneRequest,
     DatasetCreate,
+    DatasetRowCloneRequest,
     DatasetUpdate,
     DatasetResponse,
     DatasetRowCreate,
@@ -180,12 +182,70 @@ def update_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     update_data = payload.model_dump(exclude_unset=True)
+    new_schema = update_data.pop("field_schema", None)
+    if new_schema is not None:
+        if dataset.row_count > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="数据集非空，不能修改字段结构；请先清空数据行，或克隆一个新数据集后修改",
+            )
+        dataset.field_schema = [
+            field if isinstance(field, dict) else field.model_dump() for field in new_schema
+        ]
+
     for key, value in update_data.items():
         setattr(dataset, key, value)
 
     db.commit()
     db.refresh(dataset)
     return dataset
+
+
+@router.post("/{dataset_id}/clone", response_model=DatasetResponse, status_code=201)
+def clone_dataset(
+    dataset_id: int,
+    payload: DatasetCloneRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    """克隆数据集（含字段定义，默认连同行数据一起复制）。"""
+
+    source = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    include_rows = True if payload is None else payload.include_rows
+    requested_name = (payload.name.strip() if payload and payload.name else "") or f"{source.name} 副本"
+
+    clone = Dataset(
+        name=requested_name,
+        description=source.description,
+        sample_type=source.sample_type,
+        field_schema=list(source.field_schema or []),
+        row_count=0,
+    )
+    db.add(clone)
+    db.flush()
+
+    if include_rows:
+        source_rows = (
+            db.query(DatasetRow)
+            .filter(DatasetRow.dataset_id == dataset_id)
+            .order_by(DatasetRow.row_index)
+            .all()
+        )
+        for index, row in enumerate(source_rows):
+            db.add(
+                DatasetRow(
+                    dataset_id=clone.id,
+                    row_index=index,
+                    data=dict(row.data or {}),
+                )
+            )
+        clone.row_count = len(source_rows)
+
+    db.commit()
+    db.refresh(clone)
+    return clone
 
 
 @router.delete("/{dataset_id}", status_code=204)
@@ -268,6 +328,60 @@ def add_dataset_row(
     db.commit()
     db.refresh(row)
     return row
+
+
+@router.post(
+    "/{dataset_id}/rows/{row_id}/clone",
+    response_model=DatasetRowResponse,
+    status_code=201,
+)
+def clone_dataset_row(
+    dataset_id: int,
+    row_id: int,
+    payload: DatasetRowCloneRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    """克隆数据行：复制一份或多份，追加到数据集末尾。"""
+
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    source = (
+        db.query(DatasetRow)
+        .filter(DatasetRow.id == row_id, DatasetRow.dataset_id == dataset_id)
+        .first()
+    )
+    if not source:
+        raise HTTPException(status_code=404, detail="Dataset row not found")
+
+    count = 1 if payload is None else max(1, min(int(payload.count or 1), 50))
+
+    max_index = (
+        db.query(DatasetRow.row_index)
+        .filter(DatasetRow.dataset_id == dataset_id)
+        .order_by(DatasetRow.row_index.desc())
+        .first()
+    )
+    next_index = (max_index[0] + 1) if max_index else 0
+
+    created: DatasetRow | None = None
+    for offset in range(count):
+        created = DatasetRow(
+            dataset_id=dataset_id,
+            row_index=next_index + offset,
+            data=dict(source.data or {}),
+        )
+        db.add(created)
+    db.flush()
+
+    dataset.row_count = (
+        db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset_id).count()
+    )
+
+    db.commit()
+    db.refresh(created)
+    return created
 
 
 @router.delete("/{dataset_id}/rows/{row_id}", status_code=204)

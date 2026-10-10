@@ -10,20 +10,21 @@ const { Text } = Typography;
 
 const PARSER_TEMPLATE = `"""解析器说明（第一行会显示在下拉列表中）。"""
 
+from app.core.parser_utils import parse_key_value, pick_content
+
 
 def parse(raw_text: str, parsed_response, extracted: dict | None = None):
-    """把响应解析为字段字典。返回 dict 时合并覆盖 extracted，返回其他类型视为 response 内容。
+    """把响应解析为字段字典。返回 dict 时合并覆盖 extracted；平台会自动丢弃畸形键。
 
     - raw_text: 接口原始响应文本
     - parsed_response: JSON 解析成功后的对象（可能为 None）
     - extracted: 路径映射已抽取的字段
     """
-    fields: dict = {}
-    text = raw_text or ""
-    # TODO: 在这里实现你的解析逻辑
-    if text.strip():
-        fields["response"] = text.strip()
-    return fields
+    # 通用能力：从原始响应 / 结构化响应 / 已抽取字段中定位模型回答文本
+    text = pick_content(raw_text, parsed_response, extracted)
+
+    # TODO: 只写你的加工逻辑即可，例如按「key：value」切分
+    return parse_key_value(text)
 `;
 
 interface CustomParserManagerModalProps {

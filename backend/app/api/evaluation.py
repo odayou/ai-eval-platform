@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
 from app.core.database import get_db, SessionLocal
+from app.core.evaluation_engine import scenario_needs_llm
+from app.core.metric_kinds import metric_needs_llm as classify_metric_needs_llm
 from app.core.scenario_snapshot import build_scenario_snapshot, snapshot_to_scenario_metrics
 from app.models.evaluation import EvalTask
 from app.models.dataset import Dataset, DatasetRow
@@ -62,8 +64,14 @@ def _snapshot_endpoint_config(payload: EvalTaskCreate, db: Session) -> tuple[dic
         "authorization": target.authorization or "",
         "extra_headers": target.extra_headers or "{}",
         "request_body_template": target.request_body_template or "",
+        "verify_ssl": target.verify_ssl is not False,
     }
-    return target_config, target.response_mapping or {}
+    # 本页显式修改过的配置优先，否则用户在页面上临时取消 TLS 校验会被接口存档覆盖
+    payload_config = payload.target_config or {}
+    if isinstance(payload_config.get("verify_ssl"), bool):
+        target_config["verify_ssl"] = payload_config["verify_ssl"]
+    response_mapping = payload.response_mapping or target.response_mapping or {}
+    return target_config, response_mapping
 
 
 def _resolve_endpoint_test_config(
@@ -85,6 +93,7 @@ def _resolve_endpoint_test_config(
         "authorization": target.authorization or "",
         "extra_headers": target.extra_headers or "{}",
         "request_body_template": target.request_body_template or "",
+        "verify_ssl": target.verify_ssl is not False,
     }
     stored_config.update({key: value for key, value in target_config.items() if value is not None})
     if not str(target_config.get("authorization") or "").strip():
@@ -118,7 +127,18 @@ async def create_evaluation(payload: EvalTaskCreate, db: Session = Depends(get_d
     )
     if not scenario:
         raise HTTPException(status_code=404, detail="Scenario not found")
-    if not db.query(LLMConfig).filter(LLMConfig.id == payload.llm_config_id).first():
+    if not scenario.metrics:
+        raise HTTPException(status_code=400, detail="Scenario has no metrics")
+
+    # 只有包含 LLM 类指标的场景才必须配置 Judge LLM
+    needs_llm = scenario_needs_llm(scenario)
+    if payload.llm_config_id is None:
+        if needs_llm:
+            raise HTTPException(
+                status_code=400,
+                detail="当前场景包含需要 Judge 模型的指标，请选择 LLM 配置",
+            )
+    elif not db.query(LLMConfig).filter(LLMConfig.id == payload.llm_config_id).first():
         raise HTTPException(status_code=404, detail="LLM config not found")
 
     dataset = db.query(Dataset).filter(Dataset.id == payload.dataset_id).first()
@@ -233,8 +253,12 @@ async def debug_evaluation_flow(payload: EvalDebugRequest, db: Session = Depends
     if not scenario.metrics:
         raise HTTPException(status_code=400, detail="Scenario has no metrics")
 
-    llm_config = db.query(LLMConfig).filter(LLMConfig.id == payload.llm_config_id).first()
-    if not llm_config and payload.llm_config_id:
+    llm_config = (
+        db.query(LLMConfig).filter(LLMConfig.id == payload.llm_config_id).first()
+        if payload.llm_config_id
+        else None
+    )
+    if payload.llm_config_id and not llm_config:
         raise HTTPException(status_code=404, detail="LLM config not found")
 
     base_row_data = dict(dataset_row.data or {})
@@ -314,6 +338,8 @@ async def debug_evaluation_flow(payload: EvalDebugRequest, db: Session = Depends
             "metric_name": metric_name,
             "metric_display_name": metric_def.display_name,
             "metric_type": metric_def.metric_type,
+            # 由后端分类事实源下发，前端不再自行推断
+            "needs_llm": classify_metric_needs_llm(metric_def.metric_type, metric_def.name),
             "prompt_messages": None,
             "judge_raw_response": None,
             "warnings": metric_warnings,

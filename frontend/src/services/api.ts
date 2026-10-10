@@ -17,12 +17,18 @@ export const listDatasets = () => api.get('/datasets').then(r => r.data);
 export const createDataset = (data: any) => api.post('/datasets', data).then(r => r.data);
 export const getDataset = (id: number) => api.get(`/datasets/${id}`).then(r => r.data);
 export const deleteDataset = (id: number) => api.delete(`/datasets/${id}`);
+export const updateDataset = (id: number, data: { name?: string; description?: string; field_schema?: any[] }) =>
+  api.put(`/datasets/${id}`, data).then(r => r.data);
+export const cloneDataset = (id: number, payload?: { name?: string; include_rows?: boolean }) =>
+  api.post(`/datasets/${id}/clone`, payload || {}).then(r => r.data);
 export const listDatasetRows = (id: number, page = 1, pageSize = 20) =>
   api.get(`/datasets/${id}/rows`, { params: { page, page_size: pageSize } }).then(r => r.data);
 export const createDatasetRow = (id: number, data: any) =>
   api.post(`/datasets/${id}/rows`, data).then(r => r.data);
 export const deleteDatasetRow = (id: number, rowId: number) =>
   api.delete(`/datasets/${id}/rows/${rowId}`);
+export const cloneDatasetRow = (id: number, rowId: number, count = 1) =>
+  api.post(`/datasets/${id}/rows/${rowId}/clone`, { count }).then(r => r.data);
 export const importDataset = (id: number, file: File) => {
   const fd = new FormData();
   fd.append('file', file);

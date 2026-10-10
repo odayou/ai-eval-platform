@@ -15,7 +15,13 @@ import {
   Typography,
   Spin,
 } from 'antd';
-import { PlusOutlined, DeleteOutlined, MinusCircleOutlined, FileSearchOutlined } from '@ant-design/icons';
+import {
+  PlusOutlined,
+  DeleteOutlined,
+  CopyOutlined,
+  MinusCircleOutlined,
+  FileSearchOutlined,
+} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import type { Dataset, FieldDefinition } from '../types';
 import * as api from '../services/api';
@@ -97,28 +103,62 @@ const DatasetListPage: React.FC = () => {
     setFieldSchema(newSchema);
   };
 
-  const handleCreate = async () => {
+  const openCreate = () => {
+    setEditingDataset(null);
+    form.resetFields();
+    form.setFieldsValue({ sample_type: 'single_turn' });
+    setFieldSchema([...singleTurnDefaults]);
+    setModalOpen(true);
+  };
+
+  const openEdit = (record: Dataset) => {
+    setEditingDataset(record);
+    form.resetFields();
+    form.setFieldsValue({
+      name: record.name,
+      description: record.description || '',
+      sample_type: record.sample_type,
+    });
+    setFieldSchema(record.field_schema?.length ? [...record.field_schema] : []);
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setEditingDataset(null);
+    form.resetFields();
+    setFieldSchema([...singleTurnDefaults]);
+  };
+
+  const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
       const validFields = fieldSchema.filter(f => f.name.trim() !== '');
-      if (validFields.length === 0) {
+      if (!editingDataset && validFields.length === 0) {
         message.error('请至少定义一个字段');
         return;
       }
       setSubmitting(true);
-      await api.createDataset({
-        name: values.name,
-        description: values.description || '',
-        sample_type: values.sample_type,
-        field_schema: validFields,
-      });
-      message.success('数据集创建成功');
-      setModalOpen(false);
-      form.resetFields();
-      setFieldSchema([...singleTurnDefaults]);
+      if (editingDataset) {
+        const payload: any = { name: values.name, description: values.description || '' };
+        if (!schemaLocked) {
+          payload.field_schema = validFields;
+        }
+        await api.updateDataset(editingDataset.id, payload);
+        message.success('数据集已更新');
+      } else {
+        await api.createDataset({
+          name: values.name,
+          description: values.description || '',
+          sample_type: values.sample_type,
+          field_schema: validFields,
+        });
+        message.success('数据集创建成功');
+      }
+      closeModal();
       fetchDatasets();
     } catch {
-      message.error('创建失败');
+      message.error(editingDataset ? '保存失败' : '创建失败');
     } finally {
       setSubmitting(false);
     }
@@ -131,6 +171,20 @@ const DatasetListPage: React.FC = () => {
       fetchDatasets();
     } catch {
       message.error('删除失败');
+    }
+  };
+
+  const [editingDataset, setEditingDataset] = useState<Dataset | null>(null);
+  // 已有数据行时锁定字段结构，避免历史数据与新结构不兼容
+  const schemaLocked = Boolean(editingDataset) && (editingDataset?.row_count || 0) > 0;
+
+  const handleClone = async (record: Dataset) => {
+    try {
+      const created = await api.cloneDataset(record.id, { name: `${record.name} 副本` });
+      message.success(`已克隆为「${created.name}」`);
+      fetchDatasets();
+    } catch {
+      message.error('克隆失败');
     }
   };
 
@@ -163,13 +217,26 @@ const DatasetListPage: React.FC = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 100,
+      width: 250,
       render: (_: unknown, record: Dataset) => (
-        <Popconfirm title="确认删除此数据集？" onConfirm={() => handleDelete(record.id)}>
-          <Button size="small" danger icon={<DeleteOutlined />}>
-            删除
+        <Space size={4}>
+          <Button size="small" onClick={() => openEdit(record)}>
+            编辑
           </Button>
-        </Popconfirm>
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => handleClone(record)}
+            title="克隆数据集（含字段定义与全部数据行）"
+          >
+            克隆
+          </Button>
+          <Popconfirm title="确认删除此数据集？" onConfirm={() => handleDelete(record.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -184,7 +251,7 @@ const DatasetListPage: React.FC = () => {
           <Button icon={<FileSearchOutlined />} onClick={() => navigate('/datasets/rag-builder')}>
             上传文档生成测试数据
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建数据集
           </Button>
         </Space>
@@ -198,16 +265,12 @@ const DatasetListPage: React.FC = () => {
       />
 
       <Modal
-        title="新建数据集"
+        title={editingDataset ? '编辑数据集' : '新建数据集'}
         open={modalOpen}
-        onOk={handleCreate}
+        onOk={handleSubmit}
         confirmLoading={submitting}
-        onCancel={() => {
-          setModalOpen(false);
-          form.resetFields();
-          setFieldSchema([...singleTurnDefaults]);
-        }}
-        okText="创建"
+        onCancel={closeModal}
+        okText={editingDataset ? '保存' : '创建'}
         cancelText="取消"
         width={720}
       >
@@ -223,7 +286,10 @@ const DatasetListPage: React.FC = () => {
             <Input.TextArea placeholder="可选描述信息" rows={2} />
           </Form.Item>
           <Form.Item name="sample_type" label="样本类型" rules={[{ required: true }]}>
-            <Radio.Group onChange={(e) => handleSampleTypeChange(e.target.value)}>
+            <Radio.Group
+              disabled={Boolean(editingDataset)}
+              onChange={(e) => handleSampleTypeChange(e.target.value)}
+            >
               <Radio.Button value="single_turn">单轮对话</Radio.Button>
               <Radio.Button value="multi_turn">多轮对话</Radio.Button>
             </Radio.Group>
@@ -232,29 +298,38 @@ const DatasetListPage: React.FC = () => {
 
         <div style={{ marginBottom: 8 }}>
           <Typography.Text strong>字段定义</Typography.Text>
+          {schemaLocked && (
+            <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+              已有 {editingDataset?.row_count} 行数据，结构不可修改（可克隆后调整）
+            </Typography.Text>
+          )}
         </div>
         <div style={{ maxHeight: 300, overflowY: 'auto' }}>
           {fieldSchema.map((field, index) => (
             <Space key={index} style={{ display: 'flex', marginBottom: 8 }} align="start">
               <Input
+                disabled={schemaLocked}
                 placeholder="字段名"
                 value={field.name}
                 onChange={(e) => updateField(index, 'name', e.target.value)}
                 style={{ width: 140 }}
               />
               <Select
+                disabled={schemaLocked}
                 value={field.type}
                 onChange={(val) => updateField(index, 'type', val)}
                 options={fieldTypeOptions}
                 style={{ width: 140 }}
               />
               <Checkbox
+                disabled={schemaLocked}
                 checked={field.required}
                 onChange={(e) => updateField(index, 'required', e.target.checked)}
               >
                 必填
               </Checkbox>
               <Input
+                disabled={schemaLocked}
                 placeholder="描述"
                 value={field.description}
                 onChange={(e) => updateField(index, 'description', e.target.value)}
@@ -263,13 +338,21 @@ const DatasetListPage: React.FC = () => {
               <Button
                 type="text"
                 danger
+                disabled={schemaLocked}
                 icon={<MinusCircleOutlined />}
                 onClick={() => removeField(index)}
               />
             </Space>
           ))}
         </div>
-        <Button type="dashed" onClick={addField} block icon={<PlusOutlined />} style={{ marginTop: 8 }}>
+        <Button
+          type="dashed"
+          disabled={schemaLocked}
+          onClick={addField}
+          block
+          icon={<PlusOutlined />}
+          style={{ marginTop: 8 }}
+        >
           添加字段
         </Button>
       </Modal>

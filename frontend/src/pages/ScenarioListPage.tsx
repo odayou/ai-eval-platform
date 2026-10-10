@@ -31,7 +31,12 @@ import type { EvalScenario, MetricDefinition } from '../types';
 import * as api from '../services/api';
 import { MetricHelpButton, MetricHelpIcon, MetricHelpDrawer } from '../components/MetricHelpDrawer';
 import { getMetricInfo, getMetricLayer, getMetricLayerIndex, groupMetricNames, isMetricAvailableForScene } from '../utils/metricLayers';
-import { describeExactMatchConfig, isDeterministicMetricType, isExactMatchMetricType, metricTypeLabel } from '../utils/metricTypes';
+import {
+  describeExactMatchConfig,
+  isExactMatchMetricType,
+  metricNeedsLLM,
+  metricTypeLabel,
+} from '../utils/metricTypes';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -574,7 +579,7 @@ const ScenarioListPage: React.FC = () => {
                                   setHelpMetricType(def.metric_type || null);
                                 }}
                               />
-                              <Tag color={isDeterministicMetricType(def.metric_type) ? 'green' : 'blue'} style={{ marginLeft: 6 }}>
+                              <Tag color={metricNeedsLLM(def) ? 'blue' : 'green'} style={{ marginLeft: 6 }}>
                                 {metricTypeLabel(def.metric_type)}
                               </Tag>
                             </span>

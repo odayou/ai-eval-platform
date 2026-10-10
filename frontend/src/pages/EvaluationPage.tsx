@@ -3,12 +3,14 @@ import {
   Table,
   Button,
   Card,
+  Checkbox,
   Form,
   Input,
   Select,
   Space,
   message,
   Tag,
+  Tooltip,
   Typography,
   Progress,
   Popconfirm,
@@ -28,11 +30,19 @@ import {
   CodeOutlined,
   CloseOutlined,
   CopyOutlined,
+  SettingOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import type { EvalTask, Dataset, EndpointTarget, EvalScenario, LLMConfig } from '../types';
 import * as api from '../services/api';
-import { getMetricRequiredFields, isDeterministicMetricType, metricTypeLabel } from '../utils/metricTypes';
+import CustomParserManagerModal from '../components/resource/CustomParserManagerModal';
+import {
+  getMetricFieldRequirements,
+  metricNeedsLLM,
+  metricTypeLabel,
+  scenarioNeedsLLM,
+} from '../utils/metricTypes';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -148,6 +158,9 @@ const EvaluationPage: React.FC = () => {
   const selectedEvaluationMode = Form.useWatch('evaluation_mode', form) || 'offline';
   const selectedResponseMapping = Form.useWatch('response_mapping', form);
   const [testingEndpoint, setTestingEndpoint] = useState(false);
+  const [customParsers, setCustomParsers] = useState<any[]>([]);
+  const [parserModalOpen, setParserModalOpen] = useState(false);
+
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -163,16 +176,18 @@ const EvaluationPage: React.FC = () => {
 
   const fetchOptions = useCallback(async () => {
     try {
-      const [ds, sc, lc, et] = await Promise.all([
+      const [ds, sc, lc, et, ps] = await Promise.all([
         api.listDatasets(),
         api.listScenarios(),
         api.listLLMConfigs(),
         api.listEndpointTargets(),
+        api.listCustomParsers().catch(() => []),
       ]);
       setDatasets(Array.isArray(ds) ? ds : []);
       setScenarios(Array.isArray(sc) ? sc : []);
       setLLMConfigs(Array.isArray(lc) ? lc : []);
       setEndpointTargets(Array.isArray(et) ? et : []);
+      setCustomParsers(Array.isArray(ps) ? ps : (ps as any)?.items || []);
     } catch {
       message.error('加载选项数据失败');
     }
@@ -244,6 +259,24 @@ const EvaluationPage: React.FC = () => {
     };
   }, [consoleTaskId]);
 
+  /**
+   * 统一整理提交参数：确定性场景显式不带 Judge LLM；
+   * TLS 开关未勾选/undefined 一律按“校验”处理，与后端默认保持一致。
+   */
+  const buildSubmitPayload = (values: any, judgeRequired: boolean) => {
+    const payload: Record<string, any> = { ...values };
+    if (!judgeRequired) {
+      payload.llm_config_id = payload.llm_config_id ?? null;
+    }
+    if (payload.evaluation_mode === 'endpoint') {
+      payload.target_config = {
+        ...(payload.target_config || {}),
+        verify_ssl: payload.target_config?.verify_ssl !== false,
+      };
+    }
+    return payload;
+  };
+
   const handleCreate = async () => {
     try {
       const values = await form.validateFields();
@@ -253,7 +286,7 @@ const EvaluationPage: React.FC = () => {
         return;
       }
       setSubmitting(true);
-      const created = await api.createEvaluation(values);
+      const created = await api.createEvaluation(buildSubmitPayload(values, judgeLLMRequired));
       message.success('评测任务已创建');
       form.resetFields();
       setCloneSourceTask(null);
@@ -276,7 +309,7 @@ const EvaluationPage: React.FC = () => {
         return;
       }
       setDebugging(true);
-      const result = await api.debugEvaluation(values);
+      const result = await api.debugEvaluation(buildSubmitPayload(values, judgeLLMRequired));
       setDebugResult(result);
       setDebugModalOpen(true);
       if (result.success) {
@@ -366,27 +399,50 @@ const EvaluationPage: React.FC = () => {
     }
 
     const datasetFields = new Set((dataset.field_schema || []).map((field) => field.name));
-    const requiredFields = new Set<string>();
+    const requiredDatasetFields = new Set<string>();
+    const runtimeFields = new Set<string>();
     (scenario.metrics || []).forEach((scenarioMetric) => {
       const metricName = scenarioMetric.metric_definition?.name;
-      const fields = getMetricRequiredFields(scenarioMetric.metric_definition)
-        .concat(metricName ? metricRequiredFields[metricName] || [] : []);
-      fields.forEach((field) => requiredFields.add(field));
+      (metricName ? metricRequiredFields[metricName] || [] : []).forEach((field) => requiredDatasetFields.add(field));
+      const requirement = getMetricFieldRequirements(scenarioMetric.metric_definition);
+      requirement.datasetFields.forEach((field) => requiredDatasetFields.add(field));
+      requirement.runtimeFields.forEach((field) => runtimeFields.add(field));
     });
     const producedFields = getEndpointProducedFields();
-    const missingFields = Array.from(requiredFields).filter((field) => {
+    const hasCustomParser = Boolean(getEndpointMapping().custom_parser);
+    const missingDatasetFields = Array.from(requiredDatasetFields).filter((field) => !datasetFields.has(field));
+    // 待比对字段：接口模式下可由响应映射或自定义解析器运行时产出
+    const missingRuntimeFields = Array.from(runtimeFields).filter((field) => {
       if (datasetFields.has(field)) return false;
-      return selectedEvaluationMode === 'endpoint' ? !producedFields.has(field) : true;
+      if (selectedEvaluationMode !== 'endpoint') return true;
+      return !producedFields.has(field) && !hasCustomParser;
     });
-    if (missingFields.length > 0) {
+
+    if (missingDatasetFields.length > 0) {
       return {
         ok: false,
-        message: `数据集缺少当前场景必需字段：${missingFields.join(', ')}`,
+        message: `数据集缺少当前场景必需字段：${missingDatasetFields.join(', ')}`,
+      };
+    }
+    if (missingRuntimeFields.length > 0) {
+      return {
+        ok: false,
+        message: selectedEvaluationMode === 'endpoint'
+          ? `字段 ${missingRuntimeFields.join(', ')} 需要由被测接口产出，请在「被测接口」配置响应字段映射或自定义解析器抽出该字段`
+          : `数据集缺少当前场景必需字段：${missingRuntimeFields.join(', ')}（已有结果评测模式下该字段必须来自数据集）`,
       };
     }
 
-    return { ok: true, message: '数据集字段满足当前场景的核心指标要求。' };
+    return {
+      ok: true,
+      message: hasCustomParser && selectedEvaluationMode === 'endpoint'
+        ? '已配置自定义解析器，字段将在运行时由解析器产出，建议先点「验证流程」确认抽取结果。'
+        : '数据集字段满足当前场景的核心指标要求。',
+    };
   };
+
+  const getEndpointMapping = () =>
+    (selectedResponseMapping || form.getFieldValue('response_mapping') || {}) as Record<string, any>;
 
   const getEndpointProducedFields = () => {
     const mapping = selectedResponseMapping || form.getFieldValue('response_mapping') || {};
@@ -414,6 +470,7 @@ const EvaluationPage: React.FC = () => {
         target_config: {
           ...(form.getFieldValue('target_config') || {}),
           request_body_template: form.getFieldValue(['target_config', 'request_body_template']) || DEFAULT_ENDPOINT_BODY,
+          verify_ssl: form.getFieldValue(['target_config', 'verify_ssl']) !== false,
         },
         response_mapping: form.getFieldValue('response_mapping') || {},
         row_data: rowData,
@@ -459,12 +516,15 @@ const EvaluationPage: React.FC = () => {
         authorization: '',
         extra_headers: target.extra_headers || '{}',
         request_body_template: target.request_body_template || DEFAULT_ENDPOINT_BODY,
+        verify_ssl: target.verify_ssl !== false,
       },
       response_mapping: {
         response_path: target.response_mapping?.response_path || 'choices.0.message.content',
         retrieved_contexts_path: target.response_mapping?.retrieved_contexts_path || '',
         retrieved_context_ids_path: target.response_mapping?.retrieved_context_ids_path || '',
         tool_calls_path: target.response_mapping?.tool_calls_path || '',
+        // 保留接口上已配置的自定义解析器，否则抽出的业务字段会丢失
+        custom_parser: (target.response_mapping as any)?.custom_parser || '',
       },
       endpoint_test_user_input: target.default_test_input || DEFAULT_DEEPSEEK_TEST_INPUT,
     });
@@ -473,6 +533,9 @@ const EvaluationPage: React.FC = () => {
   const selectionCompatibility = getSelectionCompatibility(selectedDatasetId, selectedScenarioId);
   const selectedScenario = scenarios.find((s) => s.id === selectedScenarioId);
   const customPromptCount = (selectedScenario?.metrics || []).filter((m) => m.prompt_override).length;
+  // 场景里只要还有 LLM 类指标就必须选 Judge LLM；全确定性场景可以留空
+  const scenarioNeedsJudgeLLM = scenarioNeedsLLM(selectedScenario);
+  const judgeLLMRequired = !selectedScenario || scenarioNeedsJudgeLLM;
 
   const columns = [
     { title: '任务名称', dataIndex: 'name', key: 'name', width: 180 },
@@ -609,7 +672,9 @@ const EvaluationPage: React.FC = () => {
           <Space direction="vertical" size={2}>
             <Text strong>{cloneSourceTask ? `克隆评测任务 #${cloneSourceTask.id}` : '新建评测'}</Text>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              选择数据集、评测场景和 Judge LLM，接口评测可在下方配置请求与字段映射。
+              {selectedScenario && !judgeLLMRequired
+                ? '当前场景为确定性指标场景：Judge LLM 可留空，接口评测可在下方配置请求与字段映射。'
+                : '选择数据集、评测场景和 Judge LLM，接口评测可在下方配置请求与字段映射。'}
             </Text>
           </Space>
         }
@@ -648,6 +713,7 @@ const EvaluationPage: React.FC = () => {
               authorization: DEFAULT_DEEPSEEK_AUTHORIZATION,
               request_body_template: DEFAULT_ENDPOINT_BODY,
               extra_headers: '{}',
+              verify_ssl: true,
             },
             response_mapping: {
               response_path: 'choices.0.message.content',
@@ -713,10 +779,19 @@ const EvaluationPage: React.FC = () => {
               <Form.Item
                 name="llm_config_id"
                 label="Judge LLM"
-                rules={[{ required: true, message: '请选择 LLM' }]}
+                tooltip={judgeLLMRequired
+                  ? '用于给 LLM 类指标打分的模型'
+                  : '当前场景全部为确定性指标，不会调用该模型'}
+                extra={judgeLLMRequired ? undefined : (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    当前场景指标均为确定性指标（确定性匹配、检索命中率等），不需要 Judge LLM，可留空
+                  </Text>
+                )}
+                rules={judgeLLMRequired ? [{ required: true, message: '请选择 LLM' }] : []}
               >
                 <Select
-                  placeholder="选择 LLM 配置"
+                  allowClear
+                  placeholder={judgeLLMRequired ? '选择 LLM 配置' : '可选：当前场景不需要 Judge LLM'}
                   options={llmConfigs.map((c) => ({
                     label: `${c.name} (${c.model_name})`,
                     value: c.id,
@@ -813,6 +888,19 @@ const EvaluationPage: React.FC = () => {
                 </Col>
               </Row>
 
+              <Form.Item
+                name={['target_config', 'verify_ssl']}
+                valuePropName="checked"
+                style={{ marginBottom: 8 }}
+              >
+                <Checkbox>
+                  校验 TLS 证书（HTTPS）
+                  <Tooltip title="接口报 CERTIFICATE_VERIFY_FAILED（内网自签/缺根证书）时，可取消勾选跳过校验。">
+                    <QuestionCircleOutlined style={{ marginLeft: 6, color: '#8c8c8c' }} />
+                  </Tooltip>
+                </Checkbox>
+              </Form.Item>
+
               <Divider orientation="left" style={{ margin: '4px 0 16px' }}>响应字段映射</Divider>
               <Row gutter={16} align="bottom">
                 <Col span={5}>
@@ -839,6 +927,33 @@ const EvaluationPage: React.FC = () => {
                   <Form.Item label="连通性">
                     <Button block loading={testingEndpoint} onClick={handleTestEndpoint}>
                       测试接口
+                    </Button>
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16} align="bottom">
+                <Col span={8}>
+                  <Form.Item
+                    name={['response_mapping', 'custom_parser']}
+                    label="自定义解析器"
+                    tooltip="接口返回不是标准 JSON 时使用，解析结果会作为字段参与评分（如抽出 demandType）"
+                  >
+                    <Select
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="可选：用于解析非标准 JSON 响应"
+                      options={customParsers.map((parser: any) => ({
+                        label: parser.description ? `${parser.name} · ${parser.description}` : parser.name,
+                        value: parser.name,
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={4}>
+                  <Form.Item label="解析器">
+                    <Button block icon={<SettingOutlined />} onClick={() => setParserModalOpen(true)}>
+                      管理解析器
                     </Button>
                   </Form.Item>
                 </Col>
@@ -938,6 +1053,16 @@ const EvaluationPage: React.FC = () => {
         />
       </Card>
 
+      <CustomParserManagerModal
+        open={parserModalOpen}
+        onCancel={() => setParserModalOpen(false)}
+        onChanged={() => {
+          api.listCustomParsers()
+            .then((ps: any) => setCustomParsers(Array.isArray(ps) ? ps : ps?.items || []))
+            .catch(() => undefined);
+        }}
+      />
+
       <Modal
         title="评测流程验证结果"
         open={debugModalOpen}
@@ -1014,7 +1139,7 @@ const EvaluationPage: React.FC = () => {
                     title={
                       <Space wrap>
                         <Text strong>{trace.metric_display_name || trace.metric_name}</Text>
-                        <Tag color={isDeterministicMetricType(trace.metric_type) ? 'green' : 'default'}>
+                        <Tag color={metricNeedsLLM(trace) ? 'default' : 'green'}>
                           {metricTypeLabel(trace.metric_type)}
                         </Tag>
                         {trace.parsed_result?.score !== undefined && (

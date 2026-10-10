@@ -19,6 +19,16 @@ class EvalScenario(Base):
 
     metrics = relationship("ScenarioMetric", back_populates="scenario", cascade="all, delete-orphan")
 
+    @property
+    def needs_llm(self) -> bool:
+        """场景是否需要 Judge 大模型：任一指标需要即为需要。"""
+
+        return any(
+            scenario_metric.metric_definition.needs_llm
+            for scenario_metric in (self.metrics or [])
+            if scenario_metric.metric_definition is not None
+        )
+
 
 class ScenarioMetric(Base):
     __tablename__ = "scenario_metrics"

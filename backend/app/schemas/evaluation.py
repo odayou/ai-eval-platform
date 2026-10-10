@@ -18,7 +18,8 @@ class EvalTaskCreate(BaseModel):
     name: str
     dataset_id: int
     scenario_id: int
-    llm_config_id: int
+    # 纯确定性场景（指标不调用大模型）可以为空
+    llm_config_id: Optional[int] = None
     evaluation_mode: Literal["offline", "endpoint"] = "offline"
     endpoint_target_id: Optional[int] = None
     target_config: Optional[Dict[str, Any]] = None
@@ -50,7 +51,7 @@ class EvalTaskBrief(BaseModel):
     name: str
     dataset_id: int
     scenario_id: int
-    llm_config_id: int
+    llm_config_id: Optional[int] = None
     status: str
     progress: float
     total_rows: Optional[int] = None

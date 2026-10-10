@@ -28,6 +28,30 @@ export const metricTypeLabel = (metricType?: string | null): string =>
 export const isDeterministicMetricType = (metricType?: string | null): boolean =>
   DETERMINISTIC_METRIC_TYPES.has(metricType || '');
 
+/**
+ * 指标是否需要 Judge 大模型。
+ *
+ * 事实源在后端（app.core.metric_kinds），通过 `needs_llm` 字段下发；
+ * 这里只在字段缺失（旧数据或未刷新）时退回本地类型判断。
+ */
+export const metricNeedsLLM = (metric?: {
+  metric_type?: string | null;
+  needs_llm?: boolean | null;
+} | null): boolean => {
+  if (metric && typeof metric.needs_llm === 'boolean') return metric.needs_llm;
+  return !isDeterministicMetricType(metric?.metric_type);
+};
+
+/** 场景是否需要 Judge 大模型：任一指标需要即为需要。 */
+export const scenarioNeedsLLM = (scenario?: {
+  needs_llm?: boolean | null;
+  metrics?: Array<{ metric_definition?: any }> | null;
+} | null): boolean => {
+  if (!scenario) return true;
+  if (typeof scenario.needs_llm === 'boolean') return scenario.needs_llm;
+  return (scenario.metrics || []).some((scenarioMetric) => metricNeedsLLM(scenarioMetric?.metric_definition));
+};
+
 export const isExactMatchMetricType = (metricType?: string | null): boolean =>
   metricType === 'exact_match';
 
@@ -60,6 +84,35 @@ interface MetricLike {
   metric_type?: string;
   config?: Record<string, any> | null;
 }
+
+export interface MetricFieldRequirement {
+  /** 必须由数据集提供的字段 */
+  datasetFields: string[];
+  /** 可由被测接口的响应映射 / 自定义解析器在运行时产出的字段 */
+  runtimeFields: string[];
+}
+
+/** 区分"数据集字段"与"接口运行时字段"，避免把解析器抽出的字段误判为数据集缺失。 */
+export const getMetricFieldRequirements = (metric?: MetricLike | null): MetricFieldRequirement => {
+  const empty: MetricFieldRequirement = { datasetFields: [], runtimeFields: [] };
+  if (!metric) return empty;
+
+  if (isExactMatchMetricType(metric.metric_type)) {
+    const config = metric.config || {};
+    const field = String(config.field || 'response').trim() || 'response';
+    const expectedField = String(config.expected_field || '').trim();
+    const expectedValue = config.expected_value;
+    const hasFixedExpected = !(expectedValue === undefined || expectedValue === null || expectedValue === '');
+    return {
+      // 期望值来自数据集字段（或固定值，此时不需要数据集字段）
+      datasetFields: expectedField ? [expectedField] : hasFixedExpected ? [] : ['reference'],
+      // 待比对字段通常由接口响应映射或自定义解析器产出
+      runtimeFields: [field],
+    };
+  }
+
+  return { datasetFields: METRIC_REQUIRED_FIELDS_BY_NAME[metric.name || ''] || [], runtimeFields: [] };
+};
 
 /** 推导指标所需字段：exact_match 用 config 中的 field / expected_field，其余按指标名。 */
 export const getMetricRequiredFields = (metric?: MetricLike | null): string[] => {

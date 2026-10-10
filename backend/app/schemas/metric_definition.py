@@ -70,5 +70,7 @@ class MetricResponse(BaseModel):
     category: Optional[str] = None
     is_builtin: bool
     created_at: datetime
+    # 是否需要 Judge 大模型（由后端 app.core.metric_kinds 判定后下发，前端不再自行推断）
+    needs_llm: bool = True
 
     model_config = ConfigDict(from_attributes=True)

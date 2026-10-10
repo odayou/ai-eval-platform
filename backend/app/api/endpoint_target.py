@@ -101,6 +101,7 @@ def _target_config(target: EndpointTarget) -> dict:
         "authorization": target.authorization or "",
         "extra_headers": target.extra_headers or "{}",
         "request_body_template": target.request_body_template or "",
+        "verify_ssl": target.verify_ssl is not False,
     }
 
 

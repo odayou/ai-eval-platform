@@ -42,20 +42,21 @@ PARSER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 PARSER_TEMPLATE = '''"""解析器说明（第一行会显示在下拉列表中）。"""
 
+from app.core.parser_utils import parse_key_value, pick_content
+
 
 def parse(raw_text: str, parsed_response, extracted: dict | None = None):
-    """把响应解析为字段字典。返回 dict 时合并覆盖 extracted，返回其他类型视为 response 内容。
+    """把响应解析为字段字典。返回 dict 时合并覆盖 extracted；平台会自动丢弃畸形键。
 
     - raw_text: 接口原始响应文本
     - parsed_response: JSON 解析成功后的对象（可能为 None）
     - extracted: 路径映射已抽取的字段
     """
-    fields: dict = {}
-    text = raw_text or ""
-    # TODO: 在这里实现你的解析逻辑
-    if text.strip():
-        fields["response"] = text.strip()
-    return fields
+    # 通用能力：从原始响应 / 结构化响应 / 已抽取字段中定位模型回答文本
+    text = pick_content(raw_text, parsed_response, extracted)
+
+    # TODO: 只写你的加工逻辑即可，例如按「key：value」切分
+    return parse_key_value(text)
 '''
 
 _cache: dict[str, tuple[float, Callable[..., Any]]] = {}
@@ -163,7 +164,28 @@ def run_parser_code(
     extracted: dict[str, Any] | None = None,
 ) -> Any:
     """在独立命名空间中执行解析器源码（用于保存前的在线试解析）。"""
+    # 让草稿代码里的 `from app.core.parser_utils import ...` 可用
+    backend_root = str(PARSER_DIR.parent)
+    if backend_root not in sys.path:
+        sys.path.insert(0, backend_root)
+
     namespace: dict[str, Any] = {"__name__": "custom_parser_draft"}
+    try:
+        from app.core import parser_utils  # noqa: PLC0415
+
+        namespace.update(
+            {
+                "FIELD_KEY_RE": parser_utils.FIELD_KEY_RE,
+                "get_path": parser_utils.get_path,
+                "strip_code_fences": parser_utils.strip_code_fences,
+                "content_from_json_text": parser_utils.content_from_json_text,
+                "pick_content": parser_utils.pick_content,
+                "parse_key_value": parser_utils.parse_key_value,
+                "filter_field_keys": parser_utils.filter_field_keys,
+            }
+        )
+    except Exception:  # pragma: no cover - 兜底，正常导入不会失败
+        logger.exception("预置解析器通用工具失败")
     exec(compile(code, "<custom_parser_draft>", "exec"), namespace)  # noqa: S102
     func = namespace.get("parse")
     if not callable(func):

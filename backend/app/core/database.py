@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import MetaData, Table
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -25,6 +26,59 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+def _rebuild_sqlite_table_nullable(table_name: str, column_name: str) -> None:
+    """Rebuild a SQLite table so one column becomes nullable.
+
+    SQLite cannot ALTER a column constraint, so the table is recreated with the
+    reflected definition (column nullable relaxed) and the rows are copied over.
+    """
+
+    inspector = inspect(engine)
+    columns = inspector.get_columns(table_name)
+    target = next((column for column in columns if column["name"] == column_name), None)
+    if target is None or target.get("nullable"):
+        return
+
+    meta = MetaData()
+    old_table = Table(table_name, meta, autoload_with=engine)
+    new_columns = []
+    for column in old_table.columns:
+        copied = column.copy()
+        if copied.name == column_name:
+            copied.nullable = True
+        new_columns.append(copied)
+
+    new_table = Table(f"{table_name}__new", MetaData(), *new_columns)
+    column_names = ", ".join(f'"{column.name}"' for column in old_table.columns)
+    indexes = [
+        index for index in inspector.get_indexes(table_name)
+        if not str(index.get("name") or "").startswith("sqlite_autoindex")
+    ]
+
+    with engine.begin() as connection:
+        new_table.create(connection)
+        connection.execute(
+            text(
+                f'INSERT INTO "{table_name}__new" ({column_names}) '
+                f'SELECT {column_names} FROM "{table_name}"'
+            )
+        )
+        connection.execute(text(f'DROP TABLE "{table_name}"'))
+        connection.execute(text(f'ALTER TABLE "{table_name}__new" RENAME TO "{table_name}"'))
+
+    if indexes:
+        with engine.begin() as connection:
+            for index in indexes:
+                unique = "UNIQUE " if index.get("unique") else ""
+                index_columns = ", ".join(f'"{name}"' for name in index.get("column_names") or [])
+                connection.execute(
+                    text(
+                        f'CREATE {unique}INDEX IF NOT EXISTS "{index["name"]}" '
+                        f'ON "{table_name}" ({index_columns})'
+                    )
+                )
+
+
 def ensure_runtime_schema() -> None:
     """Apply tiny SQLite-compatible schema additions for existing local DBs."""
 
@@ -36,6 +90,10 @@ def ensure_runtime_schema() -> None:
     if "eval_tasks" not in table_names:
         return
 
+    # 纯确定性评测场景允许不配置 Judge LLM
+    _rebuild_sqlite_table_nullable("eval_tasks", "llm_config_id")
+
+    inspector = inspect(engine)
     eval_task_columns = {column["name"] for column in inspector.get_columns("eval_tasks")}
     eval_task_additions = {
         "scenario_snapshot": "ALTER TABLE eval_tasks ADD COLUMN scenario_snapshot JSON",
@@ -83,6 +141,17 @@ def ensure_runtime_schema() -> None:
             with engine.begin() as connection:
                 for sql in missing_sql:
                     connection.execute(text(sql))
+
+    if "endpoint_targets" in table_names:
+        endpoint_columns = {column["name"] for column in inspector.get_columns("endpoint_targets")}
+        if "verify_ssl" not in endpoint_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE endpoint_targets ADD COLUMN verify_ssl BOOLEAN DEFAULT 1")
+                )
+                connection.execute(
+                    text("UPDATE endpoint_targets SET verify_ssl = 1 WHERE verify_ssl IS NULL")
+                )
 
     if "scenario_metrics" in table_names:
         scenario_metric_columns = {column["name"] for column in inspector.get_columns("scenario_metrics")}

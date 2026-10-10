@@ -27,6 +27,8 @@ const multiTurnDefaults: FieldDefinition[] = [
 
 interface DatasetCreateModalProps {
   open: boolean;
+  /** 传入数据集表示编辑模式；为空表示新建 */
+  dataset?: Dataset | null;
   initialSampleType?: string;
   onCancel: () => void;
   onCreated: (dataset: Dataset) => void;
@@ -34,6 +36,7 @@ interface DatasetCreateModalProps {
 
 const DatasetCreateModal: React.FC<DatasetCreateModalProps> = ({
   open,
+  dataset = null,
   initialSampleType = 'single_turn',
   onCancel,
   onCreated,
@@ -42,12 +45,25 @@ const DatasetCreateModal: React.FC<DatasetCreateModalProps> = ({
   const [fieldSchema, setFieldSchema] = useState<FieldDefinition[]>(singleTurnDefaults);
   const [submitting, setSubmitting] = useState(false);
 
+  const isEdit = Boolean(dataset);
+  // 已有数据行时不允许改字段结构，避免历史数据与新结构不兼容
+  const schemaLocked = isEdit && (dataset?.row_count || 0) > 0;
+
   useEffect(() => {
     if (!open) return;
     form.resetFields();
+    if (dataset) {
+      form.setFieldsValue({
+        name: dataset.name,
+        description: dataset.description || '',
+        sample_type: dataset.sample_type,
+      });
+      setFieldSchema(dataset.field_schema?.length ? [...dataset.field_schema] : []);
+      return;
+    }
     form.setFieldsValue({ sample_type: initialSampleType });
     setFieldSchema(initialSampleType === 'multi_turn' ? [...multiTurnDefaults] : [...singleTurnDefaults]);
-  }, [form, initialSampleType, open]);
+  }, [form, initialSampleType, open, dataset]);
 
   const handleSampleTypeChange = (value: string) => {
     setFieldSchema(value === 'multi_turn' ? [...multiTurnDefaults] : [...singleTurnDefaults]);
@@ -68,17 +84,26 @@ const DatasetCreateModal: React.FC<DatasetCreateModalProps> = ({
         return;
       }
       setSubmitting(true);
-      const created = await api.createDataset({
+      const payload: any = {
         name: values.name,
         description: values.description || '',
-        sample_type: values.sample_type,
-        field_schema: validFields,
-      });
-      message.success('数据集创建成功');
-      onCreated(created);
+      };
+      if (!isEdit) {
+        payload.sample_type = values.sample_type;
+        payload.field_schema = validFields;
+      } else if (!schemaLocked) {
+        payload.field_schema = validFields;
+      }
+      const saved = isEdit
+        ? await api.updateDataset(dataset!.id, payload)
+        : await api.createDataset(payload);
+      message.success(isEdit ? '数据集已更新' : '数据集创建成功');
+      onCreated(saved);
       onCancel();
     } catch (error: any) {
-      if (!error?.errorFields) message.error('创建数据集失败');
+      if (!error?.errorFields) {
+        message.error(isEdit ? '更新数据集失败' : '创建数据集失败');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -86,12 +111,12 @@ const DatasetCreateModal: React.FC<DatasetCreateModalProps> = ({
 
   return (
     <Modal
-      title="新建数据集"
+      title={isEdit ? '编辑数据集' : '新建数据集'}
       open={open}
       onOk={submit}
       confirmLoading={submitting}
       onCancel={onCancel}
-      okText="创建"
+      okText={isEdit ? '保存' : '创建'}
       cancelText="取消"
       width={720}
       destroyOnClose
@@ -104,26 +129,43 @@ const DatasetCreateModal: React.FC<DatasetCreateModalProps> = ({
           <Input.TextArea placeholder="可选描述信息" rows={2} />
         </Form.Item>
         <Form.Item name="sample_type" label="样本类型" rules={[{ required: true }]}>
-          <Radio.Group onChange={(e) => handleSampleTypeChange(e.target.value)}>
+          <Radio.Group
+            disabled={isEdit}
+            onChange={(e) => handleSampleTypeChange(e.target.value)}
+          >
             <Radio.Button value="single_turn">单轮对话</Radio.Button>
             <Radio.Button value="multi_turn">多轮对话</Radio.Button>
           </Radio.Group>
         </Form.Item>
       </Form>
 
-      <div style={{ marginBottom: 8 }}>字段定义</div>
+      <div style={{ marginBottom: 8 }}>
+        字段定义
+        {schemaLocked && (
+          <span style={{ color: '#999', fontSize: 12, marginLeft: 8 }}>
+            数据集已有 {(dataset?.row_count || 0)} 行数据，结构不可修改（可克隆后调整）
+          </span>
+        )}
+      </div>
       <div style={{ maxHeight: 300, overflowY: 'auto' }}>
         {fieldSchema.map((field, index) => (
           <Space key={index} style={{ display: 'flex', marginBottom: 8 }} align="start">
-            <Input placeholder="字段名" value={field.name} onChange={(e) => updateField(index, 'name', e.target.value)} style={{ width: 140 }} />
-            <Select value={field.type} onChange={(val) => updateField(index, 'type', val)} options={fieldTypeOptions} style={{ width: 140 }} />
-            <Checkbox checked={field.required} onChange={(e) => updateField(index, 'required', e.target.checked)}>必填</Checkbox>
-            <Input placeholder="描述" value={field.description} onChange={(e) => updateField(index, 'description', e.target.value)} style={{ width: 160 }} />
-            <Button type="text" danger icon={<MinusCircleOutlined />} onClick={() => setFieldSchema(fieldSchema.filter((_, i) => i !== index))} />
+            <Input disabled={schemaLocked} placeholder="字段名" value={field.name} onChange={(e) => updateField(index, 'name', e.target.value)} style={{ width: 140 }} />
+            <Select disabled={schemaLocked} value={field.type} onChange={(val) => updateField(index, 'type', val)} options={fieldTypeOptions} style={{ width: 140 }} />
+            <Checkbox disabled={schemaLocked} checked={field.required} onChange={(e) => updateField(index, 'required', e.target.checked)}>必填</Checkbox>
+            <Input disabled={schemaLocked} placeholder="描述" value={field.description} onChange={(e) => updateField(index, 'description', e.target.value)} style={{ width: 160 }} />
+            <Button type="text" danger disabled={schemaLocked} icon={<MinusCircleOutlined />} onClick={() => setFieldSchema(fieldSchema.filter((_, i) => i !== index))} />
           </Space>
         ))}
       </div>
-      <Button type="dashed" onClick={() => setFieldSchema([...fieldSchema, { name: '', type: 'text', required: false, description: '' }])} block icon={<PlusOutlined />} style={{ marginTop: 8 }}>
+      <Button
+        type="dashed"
+        disabled={schemaLocked}
+        onClick={() => setFieldSchema([...fieldSchema, { name: '', type: 'text', required: false, description: '' }])}
+        block
+        icon={<PlusOutlined />}
+        style={{ marginTop: 8 }}
+      >
         添加字段
       </Button>
     </Modal>

@@ -16,6 +16,8 @@ class EndpointTargetBase(BaseModel):
     request_body_template: Optional[str] = None
     response_mapping: Optional[Dict[str, Any]] = None
     default_test_input: Optional[str] = None
+    # True=校验 TLS 证书；False=跳过校验（内网自签/无证书环境）
+    verify_ssl: bool = True
 
 
 class EndpointTargetCreate(EndpointTargetBase):
@@ -32,6 +34,7 @@ class EndpointTargetUpdate(BaseModel):
     request_body_template: Optional[str] = None
     response_mapping: Optional[Dict[str, Any]] = None
     default_test_input: Optional[str] = None
+    verify_ssl: Optional[bool] = None
 
 
 class EndpointTargetResponse(EndpointTargetBase):

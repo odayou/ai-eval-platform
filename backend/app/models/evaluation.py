@@ -12,7 +12,8 @@ class EvalTask(Base):
     name = Column(String(200), nullable=False)
     dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=False)
     scenario_id = Column(Integer, ForeignKey("eval_scenarios.id"), nullable=False)
-    llm_config_id = Column(Integer, ForeignKey("llm_configs.id"), nullable=False)
+    # 纯确定性场景（如只使用 exact_match / 检索命中率）不调用 Judge LLM，允许为空
+    llm_config_id = Column(Integer, ForeignKey("llm_configs.id"), nullable=True)
     status = Column(String(50), default="pending")
     progress = Column(Float, default=0.0)
     total_rows = Column(Integer, nullable=True)

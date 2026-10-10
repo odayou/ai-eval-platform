@@ -17,13 +17,18 @@ import typing as t
 from datetime import datetime, timezone
 
 from app.core.endpoint_eval import extract_eval_fields, invoke_endpoint
+from app.core.metric_kinds import (
+    KIND_LLM,
+    KIND_SIMPLE,
+    PROMPT_METRIC_TYPES,
+    classify_metric,
+    get_llm_metric_spec,
+)
 from app.core.prompt_manager import (
     ASPECT_CRITIC_INSTRUCTION,
-    BUILTIN_LLM_METRIC_SPECS,
     BUILTIN_LLM_SCORE_INSTRUCTION,
     DISCRETE_SCORE_INSTRUCTION,
     JUDGE_SYSTEM_PROMPT,
-    NAMED_LLM_METRIC_SPECS,
     NUMERIC_SCORE_INSTRUCTION,
     extract_prompt_variables,
     render_prompt,
@@ -517,7 +522,7 @@ def build_metric(
     metric_type: str = metric_def.metric_type
     config: dict = metric_def.config or {}
 
-    spec = NAMED_LLM_METRIC_SPECS.get(metric_def.name) or BUILTIN_LLM_METRIC_SPECS.get(metric_type)
+    spec = get_llm_metric_spec(metric_type, metric_def.name)
     if spec:
         return (
             "llm",
@@ -548,9 +553,9 @@ def build_metric(
     if metric_type == "exact_match":
         return ("simple", ExactMatchMetric(config))
 
-    if metric_type in {"numeric", "discrete", "aspect_critic"}:
+    if metric_type in PROMPT_METRIC_TYPES:
         return (
-            "llm",
+            KIND_LLM,
             NativePromptMetric(
                 metric_def,
                 mode=metric_type,
@@ -561,6 +566,22 @@ def build_metric(
         )
 
     raise ValueError(f"Unknown metric_type: {metric_type!r}")
+
+
+def metric_needs_llm(metric_def) -> bool:
+    """Whether this metric requires a Judge LLM call (vs. local deterministic scoring)."""
+
+    # 分类统一由 app.core.metric_kinds 决定，无法识别的类型按需要 LLM 处理
+    return classify_metric(metric_def.metric_type, getattr(metric_def, "name", None)) != KIND_SIMPLE
+
+
+def scenario_needs_llm(scenario) -> bool:
+    """Whether a scenario contains at least one LLM-based metric."""
+
+    for scenario_metric in getattr(scenario, "metrics", None) or []:
+        if metric_needs_llm(scenario_metric.metric_definition):
+            return True
+    return False
 
 
 def get_metric_prompt_template(metric_def, prompt_override: str | None = None) -> str:
@@ -712,6 +733,47 @@ async def run_evaluation(task_id: int, session_factory) -> None:
         task_obj.logs = (task_obj.logs or "") + line
         logger.info(msg)
 
+    def _log_metric_probe(task_obj, metric_name: str, metric_instance: t.Any, row_data: dict) -> None:
+        """确定性匹配类指标的取值埋点：字段名、实际值、期望值、归一化配置。"""
+
+        field = getattr(metric_instance, "field", None)
+        if not field:
+            return
+        expected_field = getattr(metric_instance, "expected_field", None)
+        actual = row_data.get(field)
+        expected = row_data.get(expected_field) if expected_field else None
+        _log(
+            task_obj,
+            f"    [确定性匹配] 待比对字段 {field} = {_preview(actual)}",
+        )
+        _log(
+            task_obj,
+            f"    [确定性匹配] 期望值字段 {expected_field or '(未配置)'} = {_preview(expected)}",
+        )
+        settings = {
+            attr: getattr(metric_instance, attr)
+            for attr in ("mode", "case_sensitive", "strip_whitespace")
+            if hasattr(metric_instance, attr)
+        }
+        if settings:
+            _log(
+                task_obj,
+                "    [确定性匹配] 配置: "
+                + ", ".join(f"{key}={value}" for key, value in settings.items()),
+            )
+
+    def _preview(value: t.Any, limit: int = 4000) -> str:
+        """单行预览字段值：换行转成 \\n，超长截断并标注总长度。"""
+
+        if isinstance(value, (dict, list)):
+            text = json.dumps(value, ensure_ascii=False)
+        else:
+            text = str(value)
+        text = text.replace("\r", " ").replace("\n", "\\n")
+        if len(text) > limit:
+            return f"{text[:limit]}… (共 {len(text)} 字符)"
+        return text
+
     try:
         task = db.query(EvalTask).get(task_id)
         if task is None:
@@ -761,18 +823,12 @@ async def run_evaluation(task_id: int, session_factory) -> None:
         _log(task, f"数据集: {dataset.name} ({total_rows} 条)")
         _log(task, f"场景: {scenario_snapshot.get('name') or scenario.name}")
         _log(task, f"评测模式: {'接口实时评测' if evaluation_mode == 'endpoint' else '已有结果评测'}")
-        _log(task, f"评判 LLM: {llm_config.model_name} @ {llm_config.api_base_url}")
         _log(task, f"指标数: {len(scenario_metrics)} 个")
         _log(task, f"进度: 0/{total_rows} (0%)")
         db.commit()
 
-        _log(task, "正在构建原生评判 LLM 客户端...")
-        db.commit()
-        judge_client = OpenAIJudgeClient(llm_config)
-        _log(task, "✓ 评判 LLM 客户端构建成功")
-        db.commit()
-
         metrics: list[tuple[str, t.Any, ScenarioMetric]] = []
+        llm_metric_count = 0
         for sm in scenario_metrics:
             metric_def: MetricDefinition = sm.metric_definition
             try:
@@ -782,6 +838,8 @@ async def run_evaluation(task_id: int, session_factory) -> None:
                     scenario_metric=sm,
                 )
                 metrics.append((metric_def.name, metric_instance, sm))
+                if kind == "llm":
+                    llm_metric_count += 1
                 _log(task, f"✓ 指标 [{metric_def.display_name}] 构建成功 (类型: {kind})")
             except Exception as exc:
                 _log(task, f"✗ 指标 [{metric_def.display_name}] 构建失败: {exc}")
@@ -790,6 +848,24 @@ async def run_evaluation(task_id: int, session_factory) -> None:
             _log(task, "✗ 错误: 没有任何指标构建成功，无法执行评测")
             db.commit()
             raise RuntimeError("No metrics could be built for this scenario")
+
+        # 只有当场景里存在 LLM 类指标时才需要 Judge 客户端
+        needs_llm = llm_metric_count > 0
+        if needs_llm and llm_config is None:
+            _log(task, "✗ 错误: 场景包含需要 Judge 模型的指标，但没有配置 LLM")
+            db.commit()
+            raise RuntimeError("Scenario requires a Judge LLM config")
+
+        if needs_llm:
+            _log(task, f"评判 LLM: {llm_config.model_name} @ {llm_config.api_base_url}")
+            _log(task, "正在构建原生评判 LLM 客户端...")
+            db.commit()
+            judge_client = OpenAIJudgeClient(llm_config)
+            _log(task, "✓ 评判 LLM 客户端构建成功")
+        else:
+            _log(task, "当前场景全部为确定性指标，不调用 Judge 模型")
+            judge_client = None
+        db.commit()
 
         _log(task, f"========== 开始逐行评测 ({total_rows} 条) ==========")
         db.commit()
@@ -810,7 +886,7 @@ async def run_evaluation(task_id: int, session_factory) -> None:
             metric_scores: dict[str, t.Any] = {}
             row_error: str | None = None
 
-            user_input_preview = str(row_data.get("user_input", ""))[:60]
+            user_input_preview = str(row_data.get("user_input", ""))[:200]
             _log(task, f"── 行 #{idx + 1}/{total_rows}: {user_input_preview}...")
             db.commit()
 
@@ -822,9 +898,11 @@ async def run_evaluation(task_id: int, session_factory) -> None:
                         base_row_data,
                         task.target_config or {},
                     )
+                    extract_debug: dict[str, t.Any] = {}
                     extracted_fields, mapping_errors = extract_eval_fields(
                         response_payload,
                         task.response_mapping or {},
+                        trace=extract_debug,
                     )
                     endpoint_trace = {
                         "status": "success",
@@ -847,23 +925,84 @@ async def run_evaluation(task_id: int, session_factory) -> None:
                     missing_fields = _missing_fields_for_metrics(row_data, metrics)
                     if missing_fields:
                         row_error = f"字段缺失导致无法完整评分: {', '.join(missing_fields)}"
+                    raw_response_text = str(response_payload.get("raw_response") or "")
                     _log(
                         task,
-                        f"  ✓ 接口调用成功，提取字段: {', '.join(extracted_fields.keys()) or '无'}",
+                        "  ── 接口响应 ── "
+                        f"HTTP {response_payload.get('status_code')} · "
+                        f"{response_payload.get('latency_ms')}ms · "
+                        f"原始响应 {len(raw_response_text)} 字符",
                     )
+                    if extracted_fields:
+                        for field_name, field_value in extracted_fields.items():
+                            _log(task, f"  · {field_name} = {_preview(field_value)}")
+                    else:
+                        _log(task, "  · 未提取到任何字段，请检查响应字段路径或自定义解析器")
+                    if raw_response_text.strip():
+                        _log(task, f"  · 响应原文 = {_preview(raw_response_text, limit=8000)}")
+                    _log(
+                        task,
+                        "  · [埋点] 字段配置: response_path="
+                        f"{extract_debug.get('response_path')} · custom_parser="
+                        f"{extract_debug.get('custom_parser') or '无'} · "
+                        f"响应已解析为对象={extract_debug.get('parsed_is_dict')}",
+                    )
+                    path_hits = extract_debug.get("path_hits") or {}
+                    if path_hits:
+                        _log(
+                            task,
+                            "  · [埋点] 路径命中: "
+                            + ", ".join(
+                                f"{name}={'命中' if hit else '未命中'}" for name, hit in path_hits.items()
+                            ),
+                        )
+                    if extract_debug.get("custom_parser"):
+                        _log(
+                            task,
+                            f"  · [埋点] 解析器 {extract_debug.get('custom_parser')}: "
+                            f"{extract_debug.get('parser_status')} · "
+                            f"产出字段={extract_debug.get('parser_output_fields')}",
+                        )
+                        _log(
+                            task,
+                            f"    解析器入参 response = {_preview(extract_debug.get('parser_input_response_preview'), limit=600)}",
+                        )
+                        _log(
+                            task,
+                            f"    解析器入参 raw_text  = {_preview(extract_debug.get('parser_input_raw_preview'), limit=600)}",
+                        )
+                        if extract_debug.get("parser_dropped_keys"):
+                            _log(
+                                task,
+                                f"    ⚠ 解析器产出的畸形字段已丢弃: {extract_debug['parser_dropped_keys']}",
+                            )
                     if mapping_errors:
                         _log(task, f"  ⚠ 字段映射提示: {mapping_errors}")
+                    if row_error:
+                        _log(
+                            task,
+                            f"  ✗ {row_error}；"
+                            f"接口响应中可用的字段: {', '.join(extracted_fields.keys()) or '无'}",
+                        )
+                        _log(
+                            task,
+                            "    ↳ 需由接口响应产出的字段，请配置响应字段映射或自定义解析器；"
+                            "数据集字段请确认数据集里确实存在该列",
+                        )
                     db.commit()
                 except Exception as exc:
-                    row_error = f"接口调用失败: {str(exc)[:800]}"
+                    row_error = f"接口调用失败: {str(exc)[:4000]}"
                     endpoint_trace = {
                         "status": "error",
                         "error": row_error,
                     }
                     for metric_name, _metric_instance, _sm in metrics:
                         metric_scores[metric_name] = {"score": None, "reason": row_error}
-                    _log(task, f"  ✗ {row_error[:200]}")
+                    _log(task, f"  ✗ {row_error}")
                     db.commit()
+
+            _log(task, f"  ── 评测指标 ({len(metrics)} 项) ──")
+            db.commit()
 
             for metric_name, metric_instance, _sm in metrics:
                 if row_error and metric_scores.get(metric_name):
@@ -875,21 +1014,29 @@ async def run_evaluation(task_id: int, session_factory) -> None:
                     break
 
                 _log(task, f"  ▸ 评测指标 [{metric_name}]...")
+                _log_metric_probe(task, metric_name, metric_instance, row_data)
                 db.commit()
                 try:
                     result = await metric_instance.ascore(row_data, judge_client)
                     val = result.value
                     if isinstance(val, (int, float)):
                         val = round(float(val), 4)
-                    reason = str(result.reason or "")[:800]
+                    reason = str(result.reason or "")[:4000]
                     metric_scores[metric_name] = {"score": val, "reason": reason}
                     if val is None:
-                        _log(task, f"  ✗ [{metric_name}] 无法评分: {reason[:200]}")
+                        _log(task, f"  ✗ [{metric_name}] 无法评分: {reason}")
+                        compared_field = getattr(metric_instance, "field", None)
+                        if compared_field:
+                            _log(
+                                task,
+                                f"    待比对字段 {compared_field} 当前值 = "
+                                f"{_preview(row_data.get(compared_field))}",
+                            )
                     else:
                         _log(task, f"  ✓ [{metric_name}] = {val}")
                 except Exception as exc:
-                    metric_scores[metric_name] = {"score": None, "reason": str(exc)[:800]}
-                    _log(task, f"  ✗ [{metric_name}] 失败: {str(exc)[:200]}")
+                    metric_scores[metric_name] = {"score": None, "reason": str(exc)[:4000]}
+                    _log(task, f"  ✗ [{metric_name}] 失败: {str(exc)}")
                 db.commit()
                 await asyncio.sleep(0)
 
@@ -899,7 +1046,7 @@ async def run_evaluation(task_id: int, session_factory) -> None:
                 db.commit()
                 break
 
-            is_pass = _determine_pass(metric_scores, metrics)
+            is_pass = _determine_pass(metric_scores, metrics, row_error)
             execution_time_ms = int((time.time() - row_start) * 1000)
 
             _persist_row_result(
@@ -916,7 +1063,7 @@ async def run_evaluation(task_id: int, session_factory) -> None:
             task.completed_rows = idx + 1
             task.progress = round((idx + 1) / total_rows, 4)
 
-            status_icon = "✓ 通过" if is_pass else "✗ 不通过"
+            status_icon = "✗ 错误" if row_error else ("✓ 通过" if is_pass else "✗ 不通过")
             _log(task, f"  → 结果: {status_icon} ({execution_time_ms}ms)")
             _log(
                 task,
@@ -1028,17 +1175,26 @@ def _infer_schema_type(value: t.Any) -> str:
     return "text"
 
 
-def _determine_pass(metric_scores: dict, metrics: list) -> bool:
+def _determine_pass(metric_scores: dict, metrics: list, row_error: str | None = None) -> bool:
     """
     Determine whether a row passes based on per-metric pass_threshold.
 
     A row passes when all metrics that have a defined threshold meet or exceed
     that threshold. Metrics with errors (score=None) cause failure.
+
+    Row-level errors (e.g. endpoint invocation failed) always fail, and when no
+    threshold is configured at all, every metric must produce a real score --
+    otherwise an unscored row would silently count as passed.
     """
+    if row_error:
+        return False
+
+    has_threshold = False
     for metric_name, _metric_instance, scenario_metric in metrics:
         threshold = scenario_metric.pass_threshold
         if threshold is None:
             continue
+        has_threshold = True
         raw = metric_scores.get(metric_name)
         if raw is None:
             return False
@@ -1050,6 +1206,24 @@ def _determine_pass(metric_scores: dict, metrics: list) -> bool:
         else:
             numeric_score = float(score)
         if numeric_score < threshold:
+            return False
+
+    if has_threshold:
+        return True
+
+    # 没有配置任何阈值时：每个指标都要拿到有效分数且大于 0，
+    # 否则“接口失败（None）”或“确定性不匹配（0）”都会被判成通过
+    if not metrics:
+        return False
+    for metric_name, _metric_instance, _scenario_metric in metrics:
+        raw = metric_scores.get(metric_name)
+        score = raw.get("score") if isinstance(raw, dict) else raw
+        if score is None:
+            return False
+        if isinstance(score, str):
+            if score.lower() not in ("pass", "yes", "true", "1"):
+                return False
+        elif float(score) <= 0:
             return False
     return True
 

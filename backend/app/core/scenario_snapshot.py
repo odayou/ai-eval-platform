@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from app.core.metric_kinds import metric_needs_llm
+
 
 def _metric_override_map(metric_overrides: list[Any] | None) -> dict[int, dict[str, Any]]:
     overrides: dict[int, dict[str, Any]] = {}
@@ -57,6 +59,7 @@ def build_scenario_snapshot(scenario, metric_overrides: list[Any] | None = None)
                     "config": metric_definition.config or {},
                     "category": metric_definition.category,
                     "is_builtin": metric_definition.is_builtin,
+                    "needs_llm": metric_definition.needs_llm,
                 },
             }
         )
@@ -99,6 +102,14 @@ def snapshot_to_scenario_metrics(snapshot: dict[str, Any] | None) -> list[Any]:
                     config=metric_definition.get("config") or {},
                     category=metric_definition.get("category"),
                     is_builtin=metric_definition.get("is_builtin", False),
+                    # 旧快照没有该字段时，按当前分类事实源补齐
+                    needs_llm=metric_definition.get(
+                        "needs_llm",
+                        metric_needs_llm(
+                            metric_definition.get("metric_type") or "",
+                            metric_definition.get("name"),
+                        ),
+                    ),
                 ),
             )
         )

@@ -21,6 +21,21 @@ class DatasetCreate(BaseModel):
 class DatasetUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    # 仅在数据集为空（row_count == 0）时允许修改，避免历史行数据与新结构不兼容
+    field_schema: Optional[List[FieldDefinition]] = None
+
+
+class DatasetCloneRequest(BaseModel):
+    """克隆数据集：默认连同行数据一起复制。"""
+
+    name: Optional[str] = None
+    include_rows: bool = True
+
+
+class DatasetRowCloneRequest(BaseModel):
+    """克隆数据行，可一次复制多份（用于快速造批量样本）。"""
+
+    count: int = 1
 
 
 class DatasetResponse(BaseModel):

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, JSON
+from sqlalchemy import Boolean, Column, Integer, String, Text, DateTime, JSON
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -15,6 +15,8 @@ class EndpointTarget(Base):
     authorization = Column(Text, nullable=True)
     extra_headers = Column(Text, nullable=True)
     request_body_template = Column(Text, nullable=True)
+    # 内网自签证书/无证书环境可关闭 TLS 校验；默认开启以保证安全
+    verify_ssl = Column(Boolean, default=True, nullable=False)
     response_mapping = Column(JSON, nullable=True)
     default_test_input = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now())

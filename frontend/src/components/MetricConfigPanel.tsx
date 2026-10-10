@@ -1,7 +1,7 @@
 import React from 'react';
 import { Checkbox, InputNumber, Tag, Space, Typography } from 'antd';
 import type { MetricDefinition } from '../types';
-import { isDeterministicMetricType, isExactMatchMetricType, metricTypeLabel } from '../utils/metricTypes';
+import { isExactMatchMetricType, metricNeedsLLM, metricTypeLabel } from '../utils/metricTypes';
 
 const { Text } = Typography;
 
@@ -96,7 +96,7 @@ const MetricConfigPanel: React.FC<MetricConfigPanelProps> = ({
                 <Space>
                   <Text strong>{metric.display_name}</Text>
                   <Tag color="blue">{metric.category}</Tag>
-                  {isDeterministicMetricType(metric.metric_type) && (
+                  {!metricNeedsLLM(metric) && (
                     <Tag color="green">{metricTypeLabel(metric.metric_type)}</Tag>
                   )}
                 </Space>

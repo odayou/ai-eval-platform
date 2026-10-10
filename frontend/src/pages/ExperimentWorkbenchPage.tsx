@@ -45,11 +45,12 @@ import EndpointTargetModal from '../components/resource/EndpointTargetModal';
 import LLMConfigModal from '../components/resource/LLMConfigModal';
 import ScenarioQuickCreateModal from '../components/resource/ScenarioQuickCreateModal';
 import DatasetRowsPanel from '../components/resource/DatasetRowsPanel';
+import { buildExecutionChecklist } from '../utils/executionChecklist';
 import {
   describeExactMatchConfig,
-  getMetricRequiredFields,
-  isDeterministicMetricType,
+  getMetricFieldRequirements,
   isExactMatchMetricType,
+  metricNeedsLLM,
   metricTypeLabel,
   METRIC_REQUIRED_FIELDS_BY_NAME,
 } from '../utils/metricTypes';
@@ -387,26 +388,46 @@ const ExperimentWorkbenchPage: React.FC = () => {
       };
     }
     const datasetFields = new Set((selectedDataset.field_schema || []).map((field) => field.name));
-    const requiredFields = new Set<string>();
+    const requiredDatasetFields = new Set<string>();
+    const runtimeFields = new Set<string>();
     (selectedScenario.metrics || []).forEach((scenarioMetric) => {
       const metricName = scenarioMetric.metric_definition?.name;
-      const fields = getMetricRequiredFields(scenarioMetric.metric_definition)
-        .concat(metricName ? metricRequiredFields[metricName] || [] : []);
-      fields.forEach((field) => requiredFields.add(field));
+      (metricName ? metricRequiredFields[metricName] || [] : []).forEach((field) => requiredDatasetFields.add(field));
+      const requirement = getMetricFieldRequirements(scenarioMetric.metric_definition);
+      requirement.datasetFields.forEach((field) => requiredDatasetFields.add(field));
+      requirement.runtimeFields.forEach((field) => runtimeFields.add(field));
     });
-    const missingFields = Array.from(requiredFields).filter((field) => {
+    // 配置了自定义解析器时，解析器会在运行时产出待比对字段
+    const hasCustomParser = Boolean((selectedEndpoint?.response_mapping as any)?.custom_parser);
+    const missingDatasetFields = Array.from(requiredDatasetFields).filter((field) => !datasetFields.has(field));
+    const missingRuntimeFields = Array.from(runtimeFields).filter((field) => {
       if (datasetFields.has(field)) return false;
-      return draft.evaluation_mode === 'endpoint' ? !endpointProducedFields.has(field) : true;
+      if (draft.evaluation_mode !== 'endpoint') return true;
+      return !endpointProducedFields.has(field) && !hasCustomParser;
     });
+    const missingFields = [...missingDatasetFields, ...missingRuntimeFields];
     if (missingFields.length > 0) {
-      return {
-        ok: false,
-        missingFields,
-        message: `数据集缺少当前场景必需字段：${missingFields.join(', ')}。`,
-      };
+      const message = missingDatasetFields.length > 0
+        ? `数据集缺少当前场景必需字段：${missingDatasetFields.join(', ')}。`
+        : draft.evaluation_mode === 'endpoint'
+          ? `字段 ${missingRuntimeFields.join(', ')} 需要由被测接口产出，请在被测接口配置响应字段映射或自定义解析器抽出该字段。`
+          : `数据集缺少当前场景必需字段：${missingRuntimeFields.join(', ')}（已有结果评测模式下该字段必须来自数据集）。`;
+      return { ok: false, missingFields, message };
     }
-    return { ok: true, missingFields: [] as string[], message: '数据集字段满足当前场景的核心指标要求。' };
-  }, [draft.evaluation_mode, endpointProducedFields, selectedDataset, selectedScenario]);
+    return {
+      ok: true,
+      missingFields: [] as string[],
+      message: hasCustomParser && draft.evaluation_mode === 'endpoint'
+        ? '已配置自定义解析器，字段将在运行时由解析器产出，建议先跑一次接口测试确认抽取结果。'
+        : '数据集字段满足当前场景的核心指标要求。',
+    };
+  }, [
+    draft.evaluation_mode,
+    endpointProducedFields,
+    selectedDataset,
+    selectedEndpoint?.response_mapping,
+    selectedScenario,
+  ]);
 
   const steps = useMemo(() => {
     const base = [
@@ -479,59 +500,52 @@ const ExperimentWorkbenchPage: React.FC = () => {
     }));
   }, [draft.selected_metric_definition_id, selectedScenarioMetrics]);
 
-  const executionBlocks = useMemo(() => {
-    const blocks: string[] = [];
-    if (!selectedDataset) {
-      blocks.push('未选择测试数据集');
-    } else if (selectedDataset.row_count <= 0) {
-      blocks.push('数据集还没有数据行，请先导入数据或添加一行');
-    }
-    if (draft.evaluation_mode === 'endpoint' && !selectedEndpoint) {
-      blocks.push('接口实时评测需要选择被测接口');
-    }
-    if (!selectedScenario) {
-      blocks.push('未选择评测场景/评测标准');
-    } else if ((selectedScenario.metrics || []).length === 0) {
-      blocks.push('当前评测场景没有指标，请先添加至少 1 个指标');
-    }
-    if (selectedDataset && selectedScenario && !compatibility.ok) {
-      blocks.push(compatibility.message);
-    }
-    if (!selectedLLM) {
-      blocks.push('未选择 Judge LLM 配置');
-    }
-    return blocks;
-  }, [compatibility, draft.evaluation_mode, selectedDataset, selectedEndpoint, selectedLLM, selectedScenario]);
+  // 阻塞项 / 建议项 / 步骤完成状态 / 提交的 Judge LLM 取值，全部来自这一份清单
+  const checklist = useMemo(
+    () => buildExecutionChecklist({
+      mode: draft.evaluation_mode,
+      datasetId: draft.dataset_id,
+      dataset: selectedDataset,
+      scenarioId: draft.scenario_id,
+      scenario: selectedScenario,
+      endpointTargetId: draft.endpoint_target_id,
+      endpoint: selectedEndpoint,
+      llmConfigId: draft.llm_config_id,
+      llm: selectedLLM,
+      taskId: draft.task_id,
+      taskDone: isTaskDone,
+      compatibilityOk: compatibility.ok,
+      compatibilityMessage: compatibility.message,
+      endpointTestStatus,
+      endpointResponseParsed,
+      llmTestStatus,
+      debugSuccess: draft.last_debug_success,
+    }),
+    [
+      compatibility,
+      draft.dataset_id,
+      draft.evaluation_mode,
+      draft.endpoint_target_id,
+      draft.last_debug_success,
+      draft.llm_config_id,
+      draft.scenario_id,
+      draft.task_id,
+      endpointResponseParsed,
+      endpointTestStatus,
+      isTaskDone,
+      llmTestStatus,
+      selectedDataset,
+      selectedEndpoint,
+      selectedLLM,
+      selectedScenario,
+    ],
+  );
+  const executionBlocks = checklist.blocks;
+  const executionWarnings = checklist.warnings;
+  // 是否需要 Judge 由清单（后端 needs_llm）决定；未选场景时按“需要 LLM”处理，保持原有引导
+  const scenarioNeedsJudgeLLM = checklist.judgeLLMRequired;
 
-  const executionWarnings = useMemo(() => {
-    const warnings: string[] = [];
-    if (draft.evaluation_mode === 'endpoint' && selectedEndpoint && endpointTestStatus !== 'success') {
-      warnings.push('建议先试跑被测接口，确认请求模板、鉴权和字段映射都可用');
-    }
-    if (draft.evaluation_mode === 'endpoint' && endpointTestStatus === 'success' && !endpointResponseParsed) {
-      warnings.push('接口试跑成功但没有解析出 response 字段，评测可能无法评分');
-    }
-    if (selectedLLM && llmTestStatus !== 'success') {
-      warnings.push('建议先测试 Judge LLM 连接，避免任务开始后才失败');
-    }
-    if (!draft.last_debug_success) {
-      warnings.push('建议先完成评测流程验证，确认 Prompt、变量和 Judge 返回都符合预期');
-    }
-    return warnings;
-  }, [draft.evaluation_mode, draft.last_debug_success, endpointResponseParsed, endpointTestStatus, llmTestStatus, selectedEndpoint, selectedLLM]);
-
-  const canProceed = (key: string) => {
-    if (key === 'mode') return true;
-    if (key === 'dataset') return datasetReady;
-    if (key === 'endpoint') return draft.evaluation_mode !== 'endpoint' || Boolean(draft.endpoint_target_id);
-    if (key === 'scenario') return Boolean(draft.scenario_id) && selectedScenarioMetricCount > 0 && compatibility.ok;
-    if (key === 'llm') return Boolean(draft.llm_config_id);
-    if (key === 'prompt') return selectedScenarioMetricCount > 0;
-    if (key === 'run') return Boolean(draft.task_id);
-    if (key === 'report') return Boolean(isTaskDone);
-    if (key === 'review') return Boolean(isTaskDone);
-    return false;
-  };
+  const canProceed = (key: string) => checklist.stepReady[key] ?? false;
 
   const getStepStatus = (index: number): 'wait' | 'process' | 'finish' | 'error' => {
     const key = steps[index]?.key;
@@ -658,7 +672,8 @@ const ExperimentWorkbenchPage: React.FC = () => {
       evaluation_mode: draft.evaluation_mode,
       dataset_id: draft.dataset_id,
       scenario_id: draft.scenario_id,
-      llm_config_id: draft.llm_config_id,
+      // 由清单给出：纯确定性场景显式为空，后端还会按场景指标再校验一次
+      llm_config_id: checklist.payloadLLMConfigId,
       result_save_mode: 'task_only',
       metric_overrides: draft.metric_overrides || [],
     };
@@ -670,6 +685,7 @@ const ExperimentWorkbenchPage: React.FC = () => {
         authorization: '',
         extra_headers: selectedEndpoint.extra_headers || '{}',
         request_body_template: selectedEndpoint.request_body_template,
+        verify_ssl: selectedEndpoint.verify_ssl !== false,
       };
       payload.response_mapping = selectedEndpoint.response_mapping || {};
     }
@@ -1110,6 +1126,14 @@ const ExperimentWorkbenchPage: React.FC = () => {
       return (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Title level={4}>配置 Judge LLM</Title>
+          {!scenarioNeedsJudgeLLM && (
+            <Alert
+              type="success"
+              showIcon
+              message="当前场景不需要 Judge LLM"
+              description="场景内全部是确定性指标（确定性匹配、检索命中率、工具调用类等），评测时不会调用大模型。可以选择留空直接进入下一步；若这里的指标类型发生变化，会重新要求选择。"
+            />
+          )}
           <Radio.Group
             value={llmSource}
             onChange={(event) => setLlmSource(event.target.value)}
@@ -1258,7 +1282,7 @@ const ExperimentWorkbenchPage: React.FC = () => {
             description="不会修改指标定义或场景模板；评测流程验证和正式批量评测都会使用这里传入的覆盖规则，并冻结到任务快照。"
           />
           {selectedScenarioMetrics.length > 0 && selectedScenarioMetrics.every(
-            (metric) => isDeterministicMetricType(metric.metric_definition?.metric_type),
+            (metric) => !metricNeedsLLM(metric.metric_definition),
           ) && (
             <Alert
               type="success"
@@ -1287,7 +1311,7 @@ const ExperimentWorkbenchPage: React.FC = () => {
                       >
                         <Space size={4}>
                           {scenarioMetric.metric_definition?.display_name || scenarioMetric.metric_definition?.name || scenarioMetric.metric_definition_id}
-                          {isDeterministicMetricType(scenarioMetric.metric_definition?.metric_type) && (
+                          {!metricNeedsLLM(scenarioMetric.metric_definition) && (
                             <Tag color="green" style={{ marginInlineEnd: 0 }}>
                               {metricTypeLabel(scenarioMetric.metric_definition?.metric_type)}
                             </Tag>
@@ -1442,7 +1466,9 @@ const ExperimentWorkbenchPage: React.FC = () => {
               <Descriptions.Item label="评测标准">
                 {selectedScenario ? `${selectedScenario.name}（${selectedScenarioMetricCount} 个指标）` : '-'}
               </Descriptions.Item>
-              <Descriptions.Item label="Judge LLM">{selectedLLM?.name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Judge LLM">
+                {selectedLLM?.name || (scenarioNeedsJudgeLLM ? '-' : '不需要（当前场景为确定性指标）')}
+              </Descriptions.Item>
               <Descriptions.Item label="结果保存">只存任务结果</Descriptions.Item>
             </Descriptions>
           </Card>
@@ -1687,7 +1713,7 @@ const ExperimentWorkbenchPage: React.FC = () => {
                     { color: datasetReady ? 'green' : draft.dataset_id ? 'orange' : 'gray', children: selectedDataset ? `${selectedDataset.name} · ${selectedDataset.row_count} 条` : '未选择数据集' },
                     ...(draft.evaluation_mode === 'endpoint' ? [{ color: draft.endpoint_target_id ? 'green' : 'gray', children: selectedEndpoint?.name || '未选择被测接口' }] : []),
                     { color: draft.scenario_id && selectedScenarioMetricCount > 0 && compatibility.ok ? 'green' : draft.scenario_id ? 'orange' : 'gray', children: selectedScenario?.name || '未选择评测标准' },
-                    { color: draft.llm_config_id ? 'green' : 'gray', children: selectedLLM?.name || '未选择 Judge LLM' },
+                    { color: draft.llm_config_id ? 'green' : scenarioNeedsJudgeLLM ? 'gray' : 'green', children: selectedLLM?.name || (scenarioNeedsJudgeLLM ? '未选择 Judge LLM' : '不需要 Judge LLM') },
                     { color: selectedScenarioMetricCount > 0 ? 'green' : 'gray', children: `Prompt 模板 ${promptOverrideCount} 个本次覆盖` },
                     { color: draft.last_debug_success ? 'green' : 'gray', children: draft.last_debug_success ? '流程验证通过' : '未完成流程验证' },
                     { color: isTaskDone ? 'green' : draft.task_id ? 'orange' : 'gray', children: currentTask?.name || '未创建任务' },

@@ -45,5 +45,7 @@ class ScenarioResponse(BaseModel):
     is_preset: bool
     metrics: List[ScenarioMetricResponse] = []
     created_at: datetime
+    # 场景是否需要 Judge 大模型：任一指标需要即为需要
+    needs_llm: bool = True
 
     model_config = ConfigDict(from_attributes=True)

@@ -64,6 +64,8 @@ export interface MetricDefinition {
   category: string;
   is_builtin: boolean;
   created_at: string;
+  /** 后端判定的「是否需要 Judge 大模型」，前端不再自行推断 */
+  needs_llm?: boolean;
 }
 
 export interface EndpointTarget {
@@ -78,6 +80,8 @@ export interface EndpointTarget {
   request_body_template?: string | null;
   response_mapping?: Record<string, any> | null;
   default_test_input?: string | null;
+  /** false=跳过 TLS 证书校验（内网自签/无证书环境），默认 true */
+  verify_ssl?: boolean;
   created_at: string;
   updated_at?: string | null;
 }
@@ -100,6 +104,8 @@ export interface EvalScenario {
   is_preset: boolean;
   metrics: ScenarioMetric[];
   created_at: string;
+  /** 场景是否需要 Judge 大模型（任一指标需要即为需要） */
+  needs_llm?: boolean;
 }
 
 export interface EvalTask {

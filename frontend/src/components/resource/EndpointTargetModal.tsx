@@ -1,5 +1,21 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Col, Descriptions, Divider, Form, Input, Modal, Row, Select, Space, Typography, message } from 'antd';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Col,
+  Descriptions,
+  Divider,
+  Form,
+  Input,
+  Modal,
+  Row,
+  Select,
+  Space,
+  Tooltip,
+  Typography,
+  message,
+} from 'antd';
 import { ExperimentOutlined, SettingOutlined } from '@ant-design/icons';
 import type { EndpointTarget } from '../../types';
 import * as api from '../../services/api';
@@ -84,6 +100,8 @@ const EndpointTargetModal: React.FC<EndpointTargetModalProps> = ({ open, target,
         ...target,
         authorization: '',
         response_mapping: { ...defaultMapping, ...(target.response_mapping || {}) },
+        // 旧数据缺字段时按“开启校验”处理，避免默认变成跳过校验
+        verify_ssl: target.verify_ssl !== false,
       });
     } else {
       form.resetFields();
@@ -96,6 +114,7 @@ const EndpointTargetModal: React.FC<EndpointTargetModalProps> = ({ open, target,
         request_body_template: DEFAULT_BODY,
         response_mapping: defaultMapping,
         default_test_input: DEFAULT_TEST_INPUT,
+        verify_ssl: true,
       });
     }
   }, [form, open, target]);
@@ -133,6 +152,7 @@ const EndpointTargetModal: React.FC<EndpointTargetModalProps> = ({ open, target,
           authorization: values.authorization || '',
           extra_headers: values.extra_headers || '{}',
           request_body_template: values.request_body_template,
+          verify_ssl: values.verify_ssl !== false,
         },
         response_mapping: values.response_mapping || {},
         row_data: {
@@ -248,6 +268,12 @@ const EndpointTargetModal: React.FC<EndpointTargetModalProps> = ({ open, target,
             </Form.Item>
           </Col>
         </Row>
+
+        <Form.Item name="verify_ssl" valuePropName="checked" style={{ marginTop: 4 }}>
+          <Tooltip title="内网 HTTPS 服务常使用自签证书或缺少根证书，会出现 CERTIFICATE_VERIFY_FAILED。此时可取消勾选跳过校验；公网服务请保持开启。">
+            <Checkbox>校验 TLS 证书（HTTPS）</Checkbox>
+          </Tooltip>
+        </Form.Item>
 
         <Divider orientation="left" style={{ margin: '4px 0 16px' }}>响应字段映射</Divider>
         <Row gutter={16}>
