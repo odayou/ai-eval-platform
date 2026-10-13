@@ -269,6 +269,9 @@ class BlindTestTaskCreate(BaseModel):
     name: str
     dataset_id: int
     sample_limit: Optional[int] = None
+    review_guide: Optional[str] = None
+    system_prompt: Optional[str] = None
+    force_task_system_prompt: bool = False
     target_a: BlindTestTargetPayload
     target_b: BlindTestTargetPayload
 
@@ -277,6 +280,9 @@ class BlindTestTaskBrief(BaseModel):
     id: int
     name: str
     dataset_id: int
+    review_guide: Optional[str] = None
+    system_prompt: Optional[str] = None
+    force_task_system_prompt: bool = False
     status: str
     progress: float
     total_rows: Optional[int] = None

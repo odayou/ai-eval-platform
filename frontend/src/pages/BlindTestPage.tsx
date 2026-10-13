@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Drawer,
@@ -592,6 +593,19 @@ const BlindTestPage: React.FC = () => {
             </Col>
           </Row>
 
+          <Alert
+            style={{ marginBottom: 16 }}
+            type="info"
+            showIcon
+            message="输入规则：提问来自所选数据集，系统提示词在下方按任务统一配置"
+            description={
+              <>
+                每行样本 = 一个评审单元，<code>user_input</code> 会原样发给 A、B 两个对比端各生成一次回答：
+                字符串按单轮提问发送；数组按多轮对话发送。系统提示词优先级：<strong>行内 <code>system_prompt</code> 字段 &gt; 下方任务级配置</strong>，都没有就不发送 system 消息。
+              </>
+            }
+          />
+
           {selectedDataset && !datasetHasUserInput && (
             <Alert
               type="warning"
@@ -606,6 +620,47 @@ const BlindTestPage: React.FC = () => {
             <Col span={12}>{renderTargetFields('target_a', '对比对象 A')}</Col>
             <Col span={12}>{renderTargetFields('target_b', '对比对象 B')}</Col>
           </Row>
+
+          <Form.Item
+            name="system_prompt"
+            label="系统提示词（任务级，可选）"
+            tooltip="对 A/B 两个对比端的全部样本生效；默认行内 system_prompt 字段优先，可勾选上方开关强制使用任务级"
+          >
+            <Input.TextArea
+              rows={3}
+              maxLength={4000}
+              showCount
+              placeholder="例如：你是装修行业资深顾问，回答需基于真实施工规范，简洁分点。留空则不发送系统提示词。"
+            />
+          </Form.Item>
+
+          
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.system_prompt !== cur.system_prompt}>
+            {({ getFieldValue }) => (
+              <Form.Item
+                name="force_task_system_prompt"
+                valuePropName="checked"
+                style={{ marginBottom: 8 }}
+              >
+                <Checkbox disabled={!getFieldValue('system_prompt')?.trim()}>
+                  强制使用任务级提示词（忽略数据集行内的 system_prompt 字段）
+                </Checkbox>
+              </Form.Item>
+            )}
+          </Form.Item>
+
+          <Form.Item
+            name="review_guide"
+            label="评审说明（评分标准）"
+            tooltip="会展示在评审人的投票界面上，用于统一判断口径"
+          >
+            <Input.TextArea
+              rows={3}
+              maxLength={2000}
+              showCount
+              placeholder="例如：优先看答案是否正确完整；明显编造事实直接判负；格式差异不影响判断；两边都达标选“都好”。"
+            />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -713,6 +768,14 @@ const BlindTestPage: React.FC = () => {
               message="当前是盲测视角"
               description="这里的“左侧 / 右侧”只是展示位置，不代表 A / B。提交后系统会根据本条样本的随机顺序还原真实的 A/B 胜出结果。"
             />
+            {detailTask?.review_guide && (
+              <Alert
+                type="warning"
+                showIcon
+                message="本任务的评审说明（评分标准）"
+                description={<Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>{detailTask.review_guide}</Paragraph>}
+              />
+            )}
             <Row gutter={16}>
               <Col span={12}>{renderDisplayedAnswer(judgeRow, 'left')}</Col>
               <Col span={12}>{renderDisplayedAnswer(judgeRow, 'right')}</Col>

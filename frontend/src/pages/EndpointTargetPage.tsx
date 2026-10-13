@@ -13,7 +13,7 @@ import {
   Typography,
   message,
 } from 'antd';
-import { DeleteOutlined, EditOutlined, ExperimentOutlined, PlusOutlined } from '@ant-design/icons';
+import { CopyOutlined, DeleteOutlined, EditOutlined, ExperimentOutlined, PlusOutlined } from '@ant-design/icons';
 import type { EndpointTarget } from '../types';
 import * as api from '../services/api';
 import EndpointTargetModal from '../components/resource/EndpointTargetModal';
@@ -71,6 +71,16 @@ const EndpointTargetPage: React.FC = () => {
     }
   };
 
+  const handleClone = async (target: EndpointTarget) => {
+    try {
+      const created = await api.cloneEndpointTarget(target.id);
+      message.success(`已克隆为「${created.name}」`);
+      fetchTargets();
+    } catch {
+      message.error('克隆失败');
+    }
+  };
+
   const handleTest = async (target: EndpointTarget) => {
     setTestingId(target.id);
     try {
@@ -125,7 +135,7 @@ const EndpointTargetPage: React.FC = () => {
       title: '接口地址',
       dataIndex: 'endpoint_url',
       key: 'endpoint_url',
-      width: 360,
+      width: 200,
       ellipsis: true,
       render: (value: string) => <Text copyable={{ text: value }} ellipsis>{value}</Text>,
     },
@@ -156,6 +166,14 @@ const EndpointTargetPage: React.FC = () => {
           </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEditModal(record)}>
             编辑
+          </Button>
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => handleClone(record)}
+            title="克隆接口配置（URL、鉴权、请求模板、字段映射等）"
+          >
+            克隆
           </Button>
           <Popconfirm title="确认删除此被测接口？" onConfirm={() => handleDelete(record)}>
             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>

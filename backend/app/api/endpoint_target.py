@@ -128,6 +128,29 @@ def create_endpoint_target(payload: EndpointTargetCreate, db: Session = Depends(
     return target
 
 
+@router.post("/{target_id}/clone", response_model=EndpointTargetResponse, status_code=201)
+def clone_endpoint_target(target_id: int, db: Session = Depends(get_db)):
+    """克隆被测接口配置（URL、鉴权、请求模板、字段映射等全部字段）。"""
+
+    source = _get_target_or_404(target_id, db)
+    clone = EndpointTarget(
+        name=f"{source.name} 副本",
+        description=source.description,
+        endpoint_url=source.endpoint_url,
+        transport_mode=source.transport_mode,
+        authorization=source.authorization,
+        extra_headers=source.extra_headers,
+        request_body_template=source.request_body_template,
+        verify_ssl=source.verify_ssl,
+        response_mapping=dict(source.response_mapping or {}),
+        default_test_input=source.default_test_input,
+    )
+    db.add(clone)
+    db.commit()
+    db.refresh(clone)
+    return clone
+
+
 @router.put("/{target_id}", response_model=EndpointTargetResponse)
 def update_endpoint_target(
     target_id: int,

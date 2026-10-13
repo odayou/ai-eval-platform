@@ -67,6 +67,12 @@ class BlindTestTask(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(200), nullable=False)
     dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=False)
+    # 评审说明/打分标准：创建任务时填写，评审人投票时展示
+    review_guide = Column(Text, nullable=True)
+    # 任务级系统提示词：对 A/B 全部样本生效；行内 system_prompt 字段可按行覆盖
+    system_prompt = Column(Text, nullable=True)
+    # 强制使用任务级提示词：忽略数据集行内的 system_prompt 字段
+    force_task_system_prompt = Column(Boolean, nullable=False, default=False)
     status = Column(String(50), default="pending")
     progress = Column(Float, default=0.0)
     total_rows = Column(Integer, nullable=True)

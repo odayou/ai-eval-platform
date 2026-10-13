@@ -126,6 +126,23 @@ def ensure_runtime_schema() -> None:
                 for sql in missing_sql:
                     connection.execute(text(sql))
 
+    if "blind_test_tasks" in table_names:
+        blind_columns = {column["name"] for column in inspector.get_columns("blind_test_tasks")}
+        if "review_guide" not in blind_columns:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE blind_test_tasks ADD COLUMN review_guide TEXT"))
+        if "system_prompt" not in blind_columns:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE blind_test_tasks ADD COLUMN system_prompt TEXT"))
+        if "force_task_system_prompt" not in blind_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE blind_test_tasks ADD COLUMN force_task_system_prompt BOOLEAN DEFAULT 0")
+                )
+                connection.execute(
+                    text("UPDATE blind_test_tasks SET force_task_system_prompt = 0 WHERE force_task_system_prompt IS NULL")
+                )
+
     if "eval_row_results" in table_names:
         row_result_columns = {column["name"] for column in inspector.get_columns("eval_row_results")}
         additions = {

@@ -96,6 +96,8 @@ export const testCustomParser = (data: { name?: string; code?: string; raw_text:
 export const createEndpointTarget = (data: any) => api.post('/endpoint-targets', data).then(r => r.data);
 export const updateEndpointTarget = (id: number, data: any) => api.put(`/endpoint-targets/${id}`, data).then(r => r.data);
 export const deleteEndpointTarget = (id: number) => api.delete(`/endpoint-targets/${id}`);
+export const cloneEndpointTarget = (id: number) =>
+  api.post(`/endpoint-targets/${id}/clone`).then(r => r.data);
 export const testEndpointTarget = (id: number, data: any) => api.post(`/endpoint-targets/${id}/test`, data).then(r => r.data);
 
 // ======================== Scenario ========================

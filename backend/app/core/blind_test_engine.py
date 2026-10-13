@@ -27,6 +27,25 @@ def _append_log(task: BlindTestTask, message: str) -> None:
     task.logs = f"{current}[{timestamp}] {message}\n"
 
 
+def _effective_row_data(
+    task_system_prompt: str | None,
+    row_data: dict[str, Any],
+    force_task_prompt: bool = False,
+) -> dict[str, Any]:
+    """合并任务级默认配置：行内未提供 system_prompt 时使用任务级系统提示词。
+
+    ``force_task_prompt`` 为真时忽略行内 system_prompt，一律使用任务级提示词。
+    """
+
+    merged = dict(row_data)
+    task_prompt = str(task_system_prompt or "").strip()
+    if not task_prompt:
+        return merged
+    if force_task_prompt or not str(merged.get("system_prompt") or "").strip():
+        merged["system_prompt"] = task_prompt
+    return merged
+
+
 def _normalize_messages(user_input: Any, row_data: dict[str, Any]) -> list[dict[str, str]]:
     system_prompt = str(row_data.get("system_prompt") or "").strip()
     messages: list[dict[str, str]] = []
@@ -319,6 +338,9 @@ async def run_blind_test(task_id: int, session_factory=SessionLocal) -> None:
 
         client_a = _build_target_client(session, task.target_a or {})
         client_b = _build_target_client(session, task.target_b or {})
+        # 闭包内避免再触碰 ORM 会话：先把任务级提示词取成普通字符串
+        task_system_prompt = str(task.system_prompt or "").strip()
+        task_force_prompt = bool(task.force_task_system_prompt)
 
         row_results = (
             session.query(BlindTestRowResult)
@@ -341,7 +363,9 @@ async def run_blind_test(task_id: int, session_factory=SessionLocal) -> None:
                 )
                 if row_result is None:
                     return row_result_id, {}
-                row_data = dict(row_result.dataset_row.data or {})
+                row_data = _effective_row_data(
+                    task_system_prompt, dict(row_result.dataset_row.data or {}), task_force_prompt
+                )
                 async with semaphore:
                     answer_a, answer_b = await asyncio.gather(
                         _safe_answer(client_a, row_data),

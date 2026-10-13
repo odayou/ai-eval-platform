@@ -256,6 +256,9 @@ export interface BlindTestTask {
   id: number;
   name: string;
   dataset_id: number;
+  review_guide?: string | null;
+  system_prompt?: string | null;
+  force_task_system_prompt?: boolean;
   status: string;
   progress: number;
   total_rows: number | null;
