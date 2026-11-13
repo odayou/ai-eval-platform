@@ -21,6 +21,7 @@ echo [配置] 后端监听 : 0.0.0.0:%APP_PORT%
 echo [配置] 健康检查 : http://127.0.0.1:%APP_PORT%/api/health
 echo [配置] 接口文档 : http://127.0.0.1:%APP_PORT%/docs
 echo [配置] 前端访问 : http://127.0.0.1:%FRONTEND_PORT%
+echo [配置] 局域网访问 : Vite 监听 0.0.0.0:%FRONTEND_PORT%，用本机 IP 加端口访问（Vite 窗口会打印 Network 地址）
 echo [配置] 代理转发 : /api -^> http://127.0.0.1:%APP_PORT%
 echo [配置] 后端 Python: %PY%
 if not exist "frontend\node_modules" echo [提示] 前端依赖未安装：请先在 frontend 目录执行 npm install，再运行本脚本。

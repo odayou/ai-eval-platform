@@ -29,6 +29,8 @@ export const deleteDatasetRow = (id: number, rowId: number) =>
   api.delete(`/datasets/${id}/rows/${rowId}`);
 export const cloneDatasetRow = (id: number, rowId: number, count = 1) =>
   api.post(`/datasets/${id}/rows/${rowId}/clone`, { count }).then(r => r.data);
+export const updateDatasetRow = (id: number, rowId: number, data: any) =>
+  api.put(`/datasets/${id}/rows/${rowId}`, { data }).then(r => r.data);
 export const importDataset = (id: number, file: File) => {
   const fd = new FormData();
   fd.append('file', file);

@@ -54,6 +54,10 @@ class DatasetRowCreate(BaseModel):
     data: Dict[str, Any]
 
 
+class DatasetRowUpdate(BaseModel):
+    data: Dict[str, Any]
+
+
 class DatasetRowResponse(BaseModel):
     id: int
     dataset_id: int

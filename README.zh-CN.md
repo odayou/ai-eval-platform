@@ -253,6 +253,14 @@ proxy: {
 
 **端口配置**：唯一来源是环境变量 `APP_PORT`（默认 `8001`），`backend/run.py` 与 `frontend/vite.config.ts` 都读取它，`start.bat` 统一设置。换端口只需改 `start.bat` 里这一行。
 
+### 用本机局域网 IP 打不开前端
+
+**现象**：`http://localhost:5173` 正常，`http://10.4.21.46:5173` 连不上。
+
+**原因**：Vite dev server 默认只监听 `localhost`（127.0.0.1/::1），本机网卡 IP 上没有监听者；此外后端 CORS 默认只允许 `http://localhost:5173`，用局域网 IP 打开页面时 `/api` 请求会被拦。
+
+**解决**：`frontend/vite.config.ts` 已设 `server.host: '0.0.0.0'`，后端 CORS 已放行回环与私有网段来源。重启 Vite 后用其窗口打印的 `Network` 地址访问；若仍连不上，检查 Windows 防火墙是否放行 5173 入站，以及访问端与本机是否在同一网段。
+
 ## 典型流程
 
 ```text

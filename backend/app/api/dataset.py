@@ -16,6 +16,7 @@ from app.schemas.dataset import (
     DatasetUpdate,
     DatasetResponse,
     DatasetRowCreate,
+    DatasetRowUpdate,
     DatasetRowResponse,
     DatasetRowsResponse,
 )
@@ -325,6 +326,34 @@ def add_dataset_row(
         db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset_id).count() + 1
     )
 
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.put("/{dataset_id}/rows/{row_id}", response_model=DatasetRowResponse)
+def update_dataset_row(
+    dataset_id: int,
+    row_id: int,
+    payload: DatasetRowUpdate,
+    db: Session = Depends(get_db),
+):
+    """编辑单行数据：按数据集字段定义校验后整体替换 data。"""
+
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    row = (
+        db.query(DatasetRow)
+        .filter(DatasetRow.id == row_id, DatasetRow.dataset_id == dataset_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Dataset row not found")
+
+    normalized = _normalize_record(dict(payload.data), dataset.field_schema or [])
+    row.data = normalized
     db.commit()
     db.refresh(row)
     return row

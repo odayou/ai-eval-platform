@@ -114,9 +114,18 @@ app = FastAPI(
 )
 
 # CORS middleware
+# 除了配置里的精确来源，还允许本机回环与私有网段地址访问前端 dev server，
+# 这样通过 http://<局域网IP>:5173 打开页面时，/api 请求不会被 CORS 拦截。
+_PRIVATE_ORIGIN_RE = (
+    r"^https?://(localhost|127\.0\.0\.1|\[::1\]|"
+    r"10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)"
+    r"(:\d+)?$"
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=_PRIVATE_ORIGIN_RE,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

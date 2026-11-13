@@ -10,10 +10,12 @@ const backendTarget = `http://127.0.0.1:${backendPort}`;
 
 console.log(`[vite] 后端代理 /api -> ${backendTarget} (APP_PORT=${backendPort})`);
 console.log(`[vite] 健康检查 ${backendTarget}/api/health`);
+console.log('[vite] 监听 0.0.0.0:5173，局域网可通过本机 IP 访问（Vite 会打印 Network 地址）');
 
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: '0.0.0.0',
     port: 5173,
     proxy: {
       '/api': backendTarget,

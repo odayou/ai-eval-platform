@@ -21,6 +21,7 @@ import {
   PlusOutlined,
   DeleteOutlined,
   CopyOutlined,
+  EditOutlined,
   UploadOutlined,
   DownloadOutlined,
 } from '@ant-design/icons';
@@ -85,6 +86,7 @@ const DatasetDetailPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [rowsLoading, setRowsLoading] = useState(false);
   const [addRowModalOpen, setAddRowModalOpen] = useState(false);
+  const [editingRow, setEditingRow] = useState<DatasetRow | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [rowForm] = Form.useForm();
@@ -138,18 +140,54 @@ const DatasetDetailPage: React.FC = () => {
     }
   }, [hasTargetRowIndex, page, pageSize, targetRowIndex]);
 
-  const handleAddRow = async () => {
+  const toFormValues = (row: DatasetRow) => {
+    const values: Record<string, any> = {};
+    fieldSchema.forEach((field) => {
+      const value = row.data?.[field.name];
+      if (value === null || value === undefined) return;
+      values[field.name] =
+        JSON_FIELD_TYPES.has(field.type) || typeof value === 'object'
+          ? JSON.stringify(value, null, 2)
+          : value;
+    });
+    return values;
+  };
+
+  const openAddRow = () => {
+    setEditingRow(null);
+    rowForm.resetFields();
+    setAddRowModalOpen(true);
+  };
+
+  const openEditRow = (row: DatasetRow) => {
+    setEditingRow(row);
+    rowForm.resetFields();
+    rowForm.setFieldsValue(toFormValues(row));
+    setAddRowModalOpen(true);
+  };
+
+  const closeRowModal = () => {
+    setAddRowModalOpen(false);
+    setEditingRow(null);
+    rowForm.resetFields();
+  };
+
+  const handleSaveRow = async () => {
     try {
       const values = await rowForm.validateFields();
       setSubmitting(true);
-      await api.createDatasetRow(datasetId, { data: values });
-      message.success('添加成功');
-      setAddRowModalOpen(false);
-      rowForm.resetFields();
+      if (editingRow) {
+        await api.updateDatasetRow(datasetId, editingRow.id, values);
+        message.success('已保存修改');
+      } else {
+        await api.createDatasetRow(datasetId, { data: values });
+        message.success('添加成功');
+      }
+      closeRowModal();
       fetchRows();
       fetchDataset();
     } catch {
-      message.error('添加失败');
+      message.error(editingRow ? '保存失败' : '添加失败');
     } finally {
       setSubmitting(false);
     }
@@ -249,9 +287,15 @@ const DatasetDetailPage: React.FC = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 160,
       render: (_: unknown, record: DatasetRow) => (
         <Space size={4}>
+          <Button
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => openEditRow(record)}
+            title="编辑此行"
+          />
           <Button
             size="small"
             icon={<CopyOutlined />}
@@ -340,7 +384,7 @@ const DatasetDetailPage: React.FC = () => {
         <Button icon={<UploadOutlined />} onClick={() => setImportModalOpen(true)}>
           导入数据
         </Button>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddRowModalOpen(true)}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAddRow}>
           添加一行
         </Button>
       </div>
@@ -371,15 +415,12 @@ const DatasetDetailPage: React.FC = () => {
       />
 
       <Modal
-        title="添加一行数据"
+        title={editingRow ? `编辑第 ${editingRow.row_index + 1} 行数据` : '添加一行数据'}
         open={addRowModalOpen}
-        onOk={handleAddRow}
+        onOk={handleSaveRow}
         confirmLoading={submitting}
-        onCancel={() => {
-          setAddRowModalOpen(false);
-          rowForm.resetFields();
-        }}
-        okText="添加"
+        onCancel={closeRowModal}
+        okText={editingRow ? '保存' : '添加'}
         cancelText="取消"
         width={600}
       >
