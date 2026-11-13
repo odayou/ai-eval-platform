@@ -150,4 +150,14 @@ app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads"
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok"}
+    """健康检查：同时暴露服务身份与实际端口，供启动脚本/代理验证打到的是本平台。"""
+
+    port = int(os.getenv("APP_PORT", "8001"))
+    return {
+        "status": "ok",
+        "service": "ai-eval-platform",
+        "pid": os.getpid(),
+        "host": os.getenv("APP_HOST", "0.0.0.0"),
+        "port": port,
+        "proxy_target": f"http://127.0.0.1:{port}",
+    }

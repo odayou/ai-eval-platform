@@ -201,7 +201,7 @@ python3 run.py
 Open:
 
 ```text
-http://localhost:8000/docs
+http://localhost:8001/docs
 ```
 
 ### 2. Start Frontend
@@ -217,6 +217,12 @@ Open:
 ```text
 http://localhost:5173
 ```
+
+### Port configuration and troubleshooting
+
+`APP_PORT` (default `8001`) is the single source of truth: `backend/run.py`, `frontend/vite.config.ts`, and `start.bat` all read it. Check `http://127.0.0.1:8001/api/health` — it must return `service: ai-eval-platform`.
+
+On Windows, another program may bind `127.0.0.1:8001` while uvicorn binds `0.0.0.0:8001`; requests through the Vite proxy then reach that other program (often a confusing 401). `run.py` probes the port before startup and exits with a clear error; `start.bat` polls the health endpoint and reports whether the backend is really ready. Use `netstat -ano | findstr ":8001"` to identify the process.
 
 ## Typical Workflow
 

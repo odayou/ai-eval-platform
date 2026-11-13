@@ -203,7 +203,7 @@ python3 run.py
 打开：
 
 ```text
-http://localhost:8000/docs
+http://localhost:8001/docs
 ```
 
 ### 2. 启动前端
@@ -222,22 +222,36 @@ http://localhost:5173
 
 ## 常见问题
 
-### 通过前端页面访问接口返回 500，但直连 `http://localhost:8000/api/...` 正常
+### 通过前端页面访问接口返回 500，但直连 `http://localhost:8001/api/...` 正常
 
-**现象**：前端页面请求 `http://localhost:5173/api/llm-configs` 等接口时返回 500，而直接访问 `http://localhost:8000/api/llm-configs` 返回 200。
+**现象**：前端页面请求 `http://localhost:5173/api/llm-configs` 等接口时返回 500，而直接访问 `http://localhost:8001/api/llm-configs` 返回 200。
 
-**原因**：开发环境下前端请求由 Vite Dev Server 代理转发到后端（见 `frontend/vite.config.ts`）。如果代理目标写的是 `localhost`，新版 Node.js 会优先把 `localhost` 解析为 IPv6 地址 `::1`；而后端 uvicorn 默认只监听 IPv4（`0.0.0.0:8000`），导致代理连接 `::1:8000` 被拒绝，http-proxy 向前端返回 500。curl 或浏览器直连 `localhost` 时会自动回退到 IPv4，因此能成功。
+**原因**：开发环境下前端请求由 Vite Dev Server 代理转发到后端（见 `frontend/vite.config.ts`）。如果代理目标写的是 `localhost`，新版 Node.js 会优先把 `localhost` 解析为 IPv6 地址 `::1`；而后端 uvicorn 默认只监听 IPv4（`0.0.0.0:8001`），导致代理连接 `::1:8001` 被拒绝，http-proxy 向前端返回 500。curl 或浏览器直连 `localhost` 时会自动回退到 IPv4，因此能成功。
 
 **解决**：将 `frontend/vite.config.ts` 中的代理目标从 `localhost` 改为 `127.0.0.1`：
 
 ```ts
 proxy: {
-  '/api': 'http://127.0.0.1:8000',
-  '/ws': { target: 'ws://127.0.0.1:8000', ws: true },
+  '/api': 'http://127.0.0.1:8001',
+  '/ws': { target: 'ws://127.0.0.1:8001', ws: true },
 },
 ```
 
 修改后 Vite 会自动重启；如未生效，手动重启 `npm run dev`。
+
+### 接口返回 401 / 后端端口是黑盒
+
+**现象**：前端所有 `/api` 请求返回 401（或奇怪的响应体），但项目后端本身没有鉴权。
+
+**原因**：Windows 允许 `0.0.0.0:8001` 与 `127.0.0.1:8001` 被两个不同进程同时绑定。若第三方程序占了 `127.0.0.1:8001`，uvicorn 绑 `0.0.0.0:8001` 仍显示启动成功，而 Vite 代理访问 `127.0.0.1` 时会被那个更具体的监听者接走。
+
+**排查与防护**：
+
+- 启动脚本 `start.bat` 会打印端口配置并轮询 `http://127.0.0.1:8001/api/health`，必须返回 `service: ai-eval-platform` 才算就绪
+- 后端 `run.py` 启动前会探测端口：已有本服务实例 / 被其他程序占用都会明确报错并退出，不再静默启动
+- 手动查占用进程：`netstat -ano | findstr ":8001"`
+
+**端口配置**：唯一来源是环境变量 `APP_PORT`（默认 `8001`），`backend/run.py` 与 `frontend/vite.config.ts` 都读取它，`start.bat` 统一设置。换端口只需改 `start.bat` 里这一行。
 
 ## 典型流程
 

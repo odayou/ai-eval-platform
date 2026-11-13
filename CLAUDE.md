@@ -68,5 +68,5 @@
 
 - 后端日志：查看控制台输出，包含 SQL 查询和 API 请求
 - 前端调试：浏览器开发者工具 + React DevTools
-- API 测试：使用 http://localhost:8000/docs 交互式文档
+- API 测试：使用 http://localhost:8001/docs 交互式文档
 - 数据库查看：使用 DB Browser for SQLite 打开 `eval_platform.db`

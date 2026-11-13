@@ -214,7 +214,7 @@ def parse(raw_text, parsed_response, extracted=None):
 
 ## 五、API 参考
 
-解析器管理也可通过 API 直接操作（交互式文档见 `http://localhost:8000/docs`）：
+解析器管理也可通过 API 直接操作（交互式文档见 `http://localhost:8001/docs`）：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|

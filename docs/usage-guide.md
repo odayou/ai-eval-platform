@@ -22,7 +22,7 @@ source venv/bin/activate
 python3 run.py
 ```
 
-**验证后端**：打开 http://localhost:8000/docs ，看到 Swagger API 文档页面。
+**验证后端**：打开 http://localhost:8001/docs ，看到 Swagger API 文档页面。
 
 ### 0.2 启动前端
 
@@ -419,7 +419,7 @@ Agent 评测评估任务完成度、工具正确性、参数正确性、步骤�
 创建一个"礼貌性"评测指标：
 
 ```bash
-curl -X POST http://localhost:8000/api/metrics \
+curl -X POST http://localhost:8001/api/metrics \
   -H "Content-Type: application/json" \
   -d '{
     "name": "politeness",
