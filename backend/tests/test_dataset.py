@@ -166,7 +166,11 @@ def test_export_dataset_as_json(client):
     assert resp.status_code == 200
     assert "application/json" in resp.headers["content-type"]
     payload = json.loads(resp.content.decode("utf-8"))
-    assert payload == [{"user_input": "Hello", "response": "Hi", "reference": ["A", "B"]}]
+    assert len(payload) == 1
+    assert payload[0]["id"] == 1
+    assert payload[0]["user_input"] == "Hello"
+    assert payload[0]["response"] == "Hi"
+    assert payload[0]["reference"] == ["A", "B"]
 
 
 def test_export_dataset_as_csv(client):
@@ -180,8 +184,8 @@ def test_export_dataset_as_csv(client):
     assert resp.status_code == 200
     assert "text/csv" in resp.headers["content-type"]
     content = resp.content.decode("utf-8-sig")
-    assert "user_input,response,reference" in content
-    assert 'Hello,Hi,"[""A"", ""B""]"' in content
+    assert "id,user_input,response,reference" in content
+    assert '1,Hello,Hi,"[""A"", ""B""]"' in content
 
 
 def test_export_dataset_with_chinese_name_as_json(client):

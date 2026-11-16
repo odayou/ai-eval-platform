@@ -114,6 +114,9 @@ def _load_import_records(filename: str, content: bytes) -> list[dict[str, Any]]:
 def _collect_export_columns(dataset: Dataset, rows: list[DatasetRow]) -> list[str]:
     columns: list[str] = []
     seen: set[str] = set()
+    # 行 id 放在第一列，便于导出后回溯定位（报告/人工复核/盲测都引用 row id）
+    seen.add("id")
+    columns.append("id")
     for field in dataset.field_schema or []:
         name = field.get("name")
         if name and name not in seen:
@@ -458,15 +461,39 @@ def import_dataset_rows(
     filename = file.filename or ""
     records = _load_import_records(filename, content)
 
-    existing_keys = {
-        _canonicalize_record(row.data or {})
+    schema_names = {
+        field.get("name") for field in (dataset.field_schema or []) if isinstance(field, dict)
+    }
+    rows_by_id = {
+        row.id: row
         for row in db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset_id).all()
     }
+    existing_keys = {_canonicalize_record(row.data or {}) for row in rows_by_id.values()}
     seen_import_keys: set[str] = set()
     normalized_records: list[dict[str, Any]] = []
     skipped_duplicates = 0
-    for record in records:
+    updated_count = 0
+    for raw_record in records:
+        record = dict(raw_record)
+        # 导出文件第一列的 id 是行标识：命中本数据集的行则定向更新该行；
+        # 未命中或缺失则作为新行导入。数据集字段里真的定义了 id 时，那是用户
+        # 自己的数据列，保留在 data 里，不参与行定位。
+        target_row: DatasetRow | None = None
+        if "id" in record and "id" not in schema_names:
+            try:
+                target_row = rows_by_id.get(int(record.pop("id")))
+            except (TypeError, ValueError):
+                target_row = None
+
         normalized = _normalize_record(record, dataset.field_schema or [])
+
+        if target_row is not None:
+            # 内容无变化的定向刷新不计数，避免“更新 N 条”虚报
+            if _canonicalize_record(target_row.data or {}) != _canonicalize_record(normalized):
+                target_row.data = normalized
+                updated_count += 1
+            continue
+
         canonical = _canonicalize_record(normalized)
         if canonical in existing_keys or canonical in seen_import_keys:
             skipped_duplicates += 1
@@ -500,6 +527,7 @@ def import_dataset_rows(
 
     return {
         "imported_count": len(normalized_records),
+        "updated_count": updated_count,
         "skipped_duplicates": skipped_duplicates,
     }
 
@@ -520,7 +548,12 @@ def export_dataset_rows(
         .order_by(DatasetRow.row_index)
         .all()
     )
-    records = [dict(row.data or {}) for row in rows]
+    records = []
+    for row in rows:
+        record = dict(row.data or {})
+        # 数据里自带 id 字段时以数据为准，避免覆盖用户自定义列
+        record.setdefault("id", row.id)
+        records.append(record)
     export_format = (format or "csv").lower()
     dataset_name = (dataset.name or f"dataset-{dataset_id}").strip().replace("/", "-")
 

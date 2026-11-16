@@ -278,16 +278,18 @@ const DatasetDetailPage: React.FC = () => {
 
   const columns = [
     {
-      title: '#',
-      dataIndex: 'row_index',
-      key: 'row_index',
-      width: 60,
+      title: 'ID',
+      dataIndex: 'id',
+      key: 'row_id',
+      width: 90,
+      fixed: 'left' as const,
+      render: (value: number) => <Text strong>{value}</Text>,
     },
-    ...dataColumns,
     {
       title: '操作',
       key: 'actions',
       width: 160,
+      fixed: 'left' as const,
       render: (_: unknown, record: DatasetRow) => (
         <Space size={4}>
           <Button
@@ -308,6 +310,7 @@ const DatasetDetailPage: React.FC = () => {
         </Space>
       ),
     },
+    ...dataColumns,
   ];
 
   const renderFieldInput = (field: FieldDefinition) => {
@@ -461,9 +464,10 @@ const DatasetDetailPage: React.FC = () => {
               try {
                 const result = await api.importDataset(datasetId, file as File);
                 const importedCount = result.imported_count ?? 0;
+                const updatedCount = result.updated_count ?? 0;
                 const skippedDuplicates = result.skipped_duplicates ?? 0;
                 message.success(
-                  `成功导入 ${importedCount} 条数据${skippedDuplicates ? `，去重跳过 ${skippedDuplicates} 条` : ''}`
+                  `新增 ${importedCount} 条${updatedCount ? `，按 id 更新 ${updatedCount} 条` : ''}${skippedDuplicates ? `，去重跳过 ${skippedDuplicates} 条` : ''}`
                 );
                 handleImportSuccess();
               } catch {
