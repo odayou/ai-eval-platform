@@ -66,3 +66,10 @@ def test_probe_existing_service_detects_other_program():
 
 def test_health_url_uses_given_port():
     assert backend_run.health_url(8001) == "http://127.0.0.1:8001/api/health"
+
+
+def test_disable_quick_edit_is_safe_to_call():
+    """关闭快速编辑：Windows 下应成功或安全失败，其他平台直接跳过。"""
+
+    result = backend_run.disable_console_quick_edit()
+    assert isinstance(result, bool)

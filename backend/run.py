@@ -5,6 +5,7 @@ uvicorn 绑 0.0.0.0 看似启动成功，但 Vite 代理访问 127.0.0.1 时会�
 程序接走（表现为莫名其妙的 401/404）。这里在启动前主动探测并明确报错。
 """
 
+import ctypes
 import os
 import socket
 import sys
@@ -14,6 +15,32 @@ import uvicorn
 
 DEFAULT_PORT = 8001
 SERVICE_TAG = "ai-eval-platform"
+
+
+def disable_console_quick_edit() -> bool:
+    """关闭当前控制台窗口的快速编辑模式。
+
+    Windows 控制台在“标记/选择文本”状态时会挂起 stdout 写入；uvicorn 每请求
+    都要写 access log，于是表现为“终端卡住 + 接口卡住，敲回车瞬间恢复”。
+    这里只修改本进程控制台输入句柄的模式，不改注册表、不影响其他窗口。
+    """
+
+    if sys.platform != "win32":
+        return False
+    try:
+        std_input_handle = -10
+        enable_quick_edit = 0x0040
+        enable_extended_flags = 0x0080
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(std_input_handle)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        new_mode = (mode.value & ~enable_quick_edit) | enable_extended_flags
+        return bool(kernel32.SetConsoleMode(handle, new_mode))
+    except Exception:
+        return False
 
 
 def current_port() -> int:
@@ -51,6 +78,9 @@ def port_is_listening(port: int) -> bool:
 def main() -> None:
     port = current_port()
     host = os.getenv("APP_HOST", "0.0.0.0")
+
+    if disable_console_quick_edit():
+        print("[检查] 已关闭控制台快速编辑模式（避免误选文本时卡住日志输出）", flush=True)
 
     print("================ AI Eval Platform 后端 ================", flush=True)
     print(f"  PID        : {os.getpid()}", flush=True)
